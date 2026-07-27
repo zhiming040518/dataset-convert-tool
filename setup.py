@@ -8,7 +8,7 @@ setup(
     description="数据集格式转换工具库 - 支持 LabelMe JSON、VOC XML、YOLO、像素掩码等格式互转",
     author="dstool",
     license="MIT",
-    python_requires=">=3.8",
+    python_requires=">=3.6",
     packages=find_packages(),
     install_requires=[
         "opencv-python>=4.5.0",
