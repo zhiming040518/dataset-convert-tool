@@ -34,29 +34,58 @@ LabelMe JSON  ──→  Pixel Mask PNG   (json2mask)
 
 ## 安装
 
-### 方式一：pip 安装（推荐）
-
-```bash
-pip install dstool/
-```
-
-安装时会自动下载所需依赖：`opencv-python`、`pillow`、`numpy`、`tqdm`。
-
-### 方式二：开发模式安装
-
-适合需要修改源码的场景：
-
-```bash
-git clone <repo-url> dstool
-cd dstool
-pip install -e .
-```
-
 ### 环境要求
 
 - Python >= 3.8
 - 支持 Windows / Linux / macOS
 - 支持 Python 虚拟环境、Anaconda/Miniconda 环境
+
+---
+
+### 方式一：从 GitHub 安装（推荐）
+
+**直接安装（无需手动 clone）：**
+
+```bash
+pip install git+https://github.com/zhiming040518/dataset-convert-tool.git
+```
+
+**从 GitHub clone 后本地安装：**
+
+```bash
+git clone https://github.com/zhiming040518/dataset-convert-tool.git
+cd dataset-convert-tool
+pip install .
+```
+
+---
+
+### 方式二：本地目录安装
+
+已有项目文件夹时：
+
+```bash
+pip install /path/to/dstool/
+# 或进入目录后
+cd dstool
+pip install .
+```
+
+---
+
+### 方式三：开发模式安装
+
+适合需要修改源码或参与开发的场景，修改代码后即时生效无需重新安装：
+
+```bash
+git clone https://github.com/zhiming040518/dataset-convert-tool.git
+cd dataset-convert-tool
+pip install -e .
+```
+
+---
+
+以上所有方式都会**自动安装依赖**：`opencv-python`、`pillow`、`numpy`、`tqdm`。
 
 ---
 
