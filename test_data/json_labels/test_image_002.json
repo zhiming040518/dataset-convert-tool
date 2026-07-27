@@ -1,0 +1,24 @@
+{
+  "version": "5.0.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "person",
+      "points": [[50, 100], [250, 450]],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {}
+    },
+    {
+      "label": "bicycle",
+      "points": [[300, 200], [350, 200], [380, 250], [370, 350], [300, 350]],
+      "group_id": null,
+      "shape_type": "polygon",
+      "flags": {}
+    }
+  ],
+  "imagePath": "test_image_002.jpg",
+  "imageData": null,
+  "imageHeight": 600,
+  "imageWidth": 800
+}

@@ -1,0 +1,31 @@
+{
+  "version": "5.0.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "person",
+      "points": [[100, 200], [300, 500]],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {}
+    },
+    {
+      "label": "car",
+      "points": [[400, 300], [450, 320], [480, 380], [420, 400]],
+      "group_id": null,
+      "shape_type": "polygon",
+      "flags": {}
+    },
+    {
+      "label": "dog",
+      "points": [[600, 400], [650, 400]],
+      "group_id": null,
+      "shape_type": "circle",
+      "flags": {}
+    }
+  ],
+  "imagePath": "test_image_001.jpg",
+  "imageData": null,
+  "imageHeight": 800,
+  "imageWidth": 1200
+}

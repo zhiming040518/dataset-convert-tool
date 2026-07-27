@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dstool"
+version = "1.0.0"
+description = "数据集格式转换工具库 - 支持 LabelMe JSON、VOC XML、YOLO、像素掩码等格式互转"
+authors = [{name = "dstool"}]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "opencv-python>=4.5.0",
+    "pillow>=9.0.0",
+    "numpy>=1.20.0",
+    "tqdm>=4.60.0",
+]
+
+[project.scripts]
+dstool = "dstool.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/user/dstool"
+
+[tool.setuptools.packages.find]
+where = ["."]
