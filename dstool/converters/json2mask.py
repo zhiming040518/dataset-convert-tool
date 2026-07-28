@@ -13,6 +13,7 @@ from dstool.utils import (
     get_image_path_from_json,
     collect_class_names,
     copy_images,
+    extract_image_from_base64,
     get_class_colors,
     generate_mask_visualization,
     make_output_dir,
@@ -170,6 +171,12 @@ def convert_json2mask(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
         # 查找图片路径
         img_path = get_image_path_from_json(json_path, data, source_dir)
+        if not img_path:
+            # 兜底：尝试从 base64 imageData 提取
+            img_filename = os.path.basename(image_filename)
+            base64_out = os.path.join(img_dir, img_filename)
+            if extract_image_from_base64(data, base64_out):
+                img_path = base64_out
         image_paths.append(img_path)
 
         # 生成掩码叠加可视化

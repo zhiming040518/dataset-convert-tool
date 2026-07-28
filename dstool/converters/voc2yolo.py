@@ -67,21 +67,31 @@ def _find_voc_image(filename: str, source_dir: str) -> Optional[str]:
         if os.path.isfile(cand):
             return cand
 
-    # 策略4: 递归搜索（按文件名匹配）
+    # 策略4: 在源目录及上级目录递归搜索（按文件名匹配）
     img_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
     base_no_ext = os.path.splitext(base)[0].lower()
 
-    for root, _, files in os.walk(source_dir):
-        for f in files:
-            if f == base:
-                return os.path.join(root, f)
-            f_lower = f.lower()
-            if f_lower == base.lower():
-                return os.path.join(root, f)
-            f_no_ext = os.path.splitext(f)[0].lower()
-            f_ext = os.path.splitext(f)[1].lower()
-            if f_no_ext == base_no_ext and f_ext in img_extensions:
-                return os.path.join(root, f)
+    search_roots = [source_dir]
+    parent = os.path.dirname(source_dir)
+    for _ in range(3):
+        if os.path.isdir(parent):
+            search_roots.append(parent)
+            parent = os.path.dirname(parent)
+        else:
+            break
+
+    for search_root in search_roots:
+        for root, _, files in os.walk(search_root):
+            for f in files:
+                if f == base:
+                    return os.path.join(root, f)
+                f_lower = f.lower()
+                if f_lower == base.lower():
+                    return os.path.join(root, f)
+                f_no_ext = os.path.splitext(f)[0].lower()
+                f_ext = os.path.splitext(f)[1].lower()
+                if f_no_ext == base_no_ext and f_ext in img_extensions:
+                    return os.path.join(root, f)
 
     return None
 

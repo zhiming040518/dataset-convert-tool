@@ -124,26 +124,36 @@ def get_image_path_from_json(json_path: str, json_data: Dict, source_dir: str) -
         if os.path.isfile(path):
             return path
 
-    # 阶段2：在源目录下递归搜索（按文件名匹配）
-    # 支持常见图片扩展名
+    # 阶段2：在源目录及上级目录下递归搜索（按文件名匹配）
     img_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
     base_no_ext = os.path.splitext(base)[0].lower()
 
-    for root, _, files in os.walk(source_dir):
-        for f in files:
-            # 精确匹配文件名
-            if f == base:
-                return os.path.join(root, f)
-            # 忽略扩展名大小写匹配
-            f_lower = f.lower()
-            name_lower = base.lower()
-            if f_lower == name_lower:
-                return os.path.join(root, f)
-            # 同名但不同扩展名
-            f_no_ext = os.path.splitext(f)[0].lower()
-            f_ext = os.path.splitext(f)[1].lower()
-            if f_no_ext == base_no_ext and f_ext in img_extensions:
-                return os.path.join(root, f)
+    # 构建搜索根目录列表：源目录 + 源目录的上级（最多3级）
+    search_roots = [source_dir]
+    parent = os.path.dirname(source_dir)
+    for _ in range(3):
+        if os.path.isdir(parent):
+            search_roots.append(parent)
+            parent = os.path.dirname(parent)
+        else:
+            break
+
+    for search_root in search_roots:
+        for root, _, files in os.walk(search_root):
+            for f in files:
+                # 精确匹配文件名
+                if f == base:
+                    return os.path.join(root, f)
+                # 忽略大小写匹配
+                f_lower = f.lower()
+                name_lower = base.lower()
+                if f_lower == name_lower:
+                    return os.path.join(root, f)
+                # 同名但不同扩展名
+                f_no_ext = os.path.splitext(f)[0].lower()
+                f_ext = os.path.splitext(f)[1].lower()
+                if f_no_ext == base_no_ext and f_ext in img_extensions:
+                    return os.path.join(root, f)
 
     return None
 
@@ -268,6 +278,31 @@ def yolo_bbox(xmin: int, ymin: int, xmax: int, ymax: int,
     h = max(0.0, min(1.0, h))
 
     return cx, cy, w, h
+
+
+def extract_image_from_base64(json_data: Dict, output_path: str) -> bool:
+    """从 LabelMe JSON 的 imageData 字段提取 base64 编码的图片
+
+    Args:
+        json_data: 解析后的 JSON 数据
+        output_path: 输出图片路径
+
+    Returns:
+        成功返回 True，失败返回 False
+    """
+    import base64
+
+    image_data = json_data.get("imageData", "")
+    if not image_data or not isinstance(image_data, str) or len(image_data) < 100:
+        return False
+
+    try:
+        img_bytes = base64.b64decode(image_data)
+        with open(output_path, "wb") as f:
+            f.write(img_bytes)
+        return True
+    except Exception:
+        return False
 
 
 def copy_images(src: str, dst: str, image_paths: List[str]) -> int:
