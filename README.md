@@ -12,6 +12,13 @@ Pascal VOC    ──→  YOLO txt         (voc2yolo)
 LabelMe JSON  ──→  Pixel Mask PNG   (json2mask)
 ```
 
+支持的数据集操作：
+
+```
+多数据集合并  ──→  完整 YOLO 数据集  (merge-yolo)
+多数据集合并  ──→  完整 VOC 数据集   (merge-voc)
+```
+
 ---
 
 ## 目录
@@ -23,6 +30,8 @@ LabelMe JSON  ──→  Pixel Mask PNG   (json2mask)
   - [dstool json2yolo](#dstool-json2yolo)
   - [dstool voc2yolo](#dstool-voc2yolo)
   - [dstool json2mask](#dstool-json2mask)
+  - [dstool merge-yolo](#dstool-merge-yolo)
+  - [dstool merge-voc](#dstool-merge-voc)
 - [LabelMe JSON 输入格式](#labelme-json-输入格式)
 - [输出格式说明](#输出格式说明)
 - [使用场景示例](#使用场景示例)
@@ -108,6 +117,8 @@ dstool json2voc  -src ./labels   -output ./VOCdevkit
 dstool json2yolo -src ./labels   -output ./YOLO_dataset
 dstool voc2yolo  -src ./VOC2007  -output ./YOLO_dataset
 dstool json2mask -src ./labels   -output ./masks
+dstool merge-yolo -train ./train_set -val ./val_set -test ./test_set -output ./full_yolo
+dstool merge-voc  -train ./train_voc -val ./val_voc -test ./test_voc -output ./full_voc
 
 # 交互模式（适合不熟悉命令行的用户）
 dstool json2voc
@@ -301,6 +312,119 @@ masks/
 ```
 
 **掩码文件命名规则**：`{图片名}_{类别名}.png`
+
+---
+
+### dstool merge-yolo
+
+将多个独立的 YOLO 数据集（训练/验证/测试）合并为一个分层的完整 YOLO 数据集。
+
+```bash
+dstool merge-yolo -train ./train_set -val ./val_set -test ./test_set -output ./full_yolo
+```
+
+`-output` 参数可省略，默认按以下优先级确定输出路径：
+
+1. 训练集所在目录 → 2. 验证集所在目录 → 3. 测试集所在目录 → 4. 当前工作目录
+
+例如 `-train /data/train_set` 不指定 `-output` 时，默认输出到 `/data/merged_dataset/`。
+
+**目录识别策略**：
+
+每个输入数据集目录支持两种方式定位 `images/` 和 `labels/` 子文件夹：
+
+1. **标准命名（优先）**：直接查找 `images/` 和 `labels/` 子目录
+2. **智能检测（后备）**：当标准目录名不存在时，自动扫描数据集根目录下的所有子文件夹，按文件扩展名占比判断：
+   - 图片扩展名（`.jpg` `.png` `.bmp` 等）占比 ≥ 30% → 图片目录
+   - `.txt` 文件占比 ≥ 30% → 标注目录
+
+检测到非标准目录时会打印 `[自动检测]` 提示。
+
+**类别合并**：
+- 优先读取各数据集的 `classes.txt`
+- 如果没有 `classes.txt`，自动从标注文件中推断类别
+- 跨数据集合并时统一重新编号 class_id
+
+**输出结构**：
+
+```
+full_yolo/
+├── images/
+│   ├── train/           # 训练集图片
+│   ├── val/             # 验证集图片
+│   └── test/            # 测试集图片
+├── labels/
+│   ├── train/           # 训练集标注
+│   ├── val/             # 验证集标注
+│   └── test/            # 测试集标注
+├── classes.txt          # 合并后的所有类别
+└── dataset.yaml         # YOLO 训练配置文件
+```
+
+**文件名冲突处理**：不同分集间如有同名文件，自动添加分集前缀（如 `train_image001.jpg`）。
+
+**终端输出示例**：
+
+```
+合并类别 (4 类): bicycle, car, dog, person
+  [train] 150 张图片, 150 个标注
+  [val] 30 张图片, 30 个标注
+  [test] 20 张图片, 20 个标注
+
+[OK] 合并完成！数据集已保存至: /home/user/full_yolo
+```
+
+---
+
+### dstool merge-voc
+
+将多个独立的 VOC 数据集（训练/验证/测试）合并为一个分层的完整 VOC 数据集。
+
+```bash
+dstool merge-voc -train ./train_voc -val ./val_voc -test ./test_voc -output ./full_voc
+```
+
+`-output` 参数可省略，默认按以下优先级确定输出路径：
+
+1. 训练集所在目录 → 2. 验证集所在目录 → 3. 测试集所在目录 → 4. 当前工作目录
+
+例如 `-train /data/train_voc` 不指定 `-output` 时，默认输出到 `/data/merged_VOC/`。
+
+**目录识别策略**：
+
+每个输入数据集目录支持两种方式定位 `Annotations/` 和 `JPEGImages/` 子文件夹：
+
+1. **标准命名（优先）**：直接查找 `Annotations/` 和 `JPEGImages/` 子目录
+2. **智能检测（后备）**：当标准目录名不存在时，自动扫描数据集根目录下的所有子文件夹，按文件扩展名占比判断：
+   - 图片扩展名占比 ≥ 30% → 图片目录
+   - `.xml` 文件占比 ≥ 30% → 标注目录
+
+检测到非标准目录时会打印 `[自动检测]` 提示。
+
+**输出结构**：
+
+```
+full_voc/
+├── Annotations/         # 所有 XML 标注文件
+├── JPEGImages/          # 所有图片文件
+└── ImageSets/
+    └── Main/
+        ├── train.txt    # 训练集文件名列表
+        ├── val.txt      # 验证集文件名列表
+        └── test.txt     # 测试集文件名列表
+```
+
+**文件名冲突处理**：不同分集间如有同名文件，自动添加分集前缀（如 `train_image001.jpg`）。
+
+**终端输出示例**：
+
+```
+  [train] 150 个 XML, 150 张图片
+  [val] 30 个 XML, 30 张图片
+  [test] 20 个 XML, 20 张图片
+
+[OK] 合并完成！数据集已保存至: /home/user/full_voc
+```
 
 ---
 
@@ -505,6 +629,23 @@ done
 echo "全部完成！"
 ```
 
+### 场景 5：合并多个 YOLO 数据集
+
+```bash
+# 将训练/验证/测试三个独立数据集合并为一个
+dstool merge-yolo -train ./yolo_train -val ./yolo_val -test ./yolo_test -output ./yolo_full
+
+# 标准命名目录直接识别，非标准目录自动智能检测
+# 例如：目录结构为 photos/ 和 txt_ann/ 也能被自动识别
+```
+
+### 场景 6：合并多个 VOC 数据集
+
+```bash
+# 将多个 VOC 标注的子集合并
+dstool merge-voc -train ./voc_part1 -val ./voc_part2 -test ./voc_part3 -output ./voc_full
+```
+
 ---
 
 ## 依赖
@@ -577,7 +718,9 @@ dstool/
 │       ├── json2voc.py      # LabelMe JSON → VOC XML
 │       ├── json2yolo.py     # LabelMe JSON → YOLO txt
 │       ├── voc2yolo.py      # VOC XML → YOLO txt
-│       └── json2mask.py     # LabelMe JSON → Pixel Mask PNG
+│       ├── json2mask.py     # LabelMe JSON → Pixel Mask PNG
+│       ├── merge_yolo.py    # 合并 YOLO 数据集（智能目录检测）
+│       └── merge_voc.py     # 合并 VOC 数据集（智能目录检测）
 └── test_data/
     └── json_labels/         # 测试用 LabelMe JSON 示例
 ```
