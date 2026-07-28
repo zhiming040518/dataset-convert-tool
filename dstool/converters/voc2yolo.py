@@ -20,9 +20,10 @@ def _find_voc_image(filename: str, source_dir: str) -> Optional[str]:
     """在 VOC 目录结构中查找图片文件
 
     查找策略:
-        1. source_dir/JPEGImages/
+        1. source_dir/JPEGImages/ 下直接查找
         2. source_dir/../JPEGImages/（source_dir 可能是 Annotations/）
-        3. source_dir/ 及子目录下递归匹配
+        3. 常见子目录 candidates 匹配
+        4. 递归搜索（匹配文件名，包括同名前缀不同扩展名）
 
     Args:
         filename: XML 中的图片文件名
@@ -34,10 +35,15 @@ def _find_voc_image(filename: str, source_dir: str) -> Optional[str]:
     if not filename:
         return None
 
+    base = os.path.basename(filename)
+
     # 策略1: source_dir/JPEGImages/
     jpeg_dir = os.path.join(source_dir, "JPEGImages")
     if os.path.isdir(jpeg_dir):
         img_path = os.path.join(jpeg_dir, filename)
+        if os.path.isfile(img_path):
+            return img_path
+        img_path = os.path.join(jpeg_dir, base)
         if os.path.isfile(img_path):
             return img_path
 
@@ -47,15 +53,35 @@ def _find_voc_image(filename: str, source_dir: str) -> Optional[str]:
         img_path = os.path.join(parent_jpeg, filename)
         if os.path.isfile(img_path):
             return img_path
+        img_path = os.path.join(parent_jpeg, base)
+        if os.path.isfile(img_path):
+            return img_path
 
-    # 策略3: 递归搜索
-    basename = os.path.basename(filename)
+    # 策略3: 常见图片子目录快速查找
+    for subdir in ("images", "imgs", "pics", "pictures", "photos"):
+        cand = os.path.join(source_dir, subdir, base)
+        if os.path.isfile(cand):
+            return cand
+        # 也尝试从上级目录查找
+        cand = os.path.join(os.path.dirname(source_dir), subdir, base)
+        if os.path.isfile(cand):
+            return cand
+
+    # 策略4: 递归搜索（按文件名匹配）
+    img_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+    base_no_ext = os.path.splitext(base)[0].lower()
+
     for root, _, files in os.walk(source_dir):
         for f in files:
-            if f == basename:
-                img_ext = os.path.splitext(f)[1].lower()
-                if img_ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"):
-                    return os.path.join(root, f)
+            if f == base:
+                return os.path.join(root, f)
+            f_lower = f.lower()
+            if f_lower == base.lower():
+                return os.path.join(root, f)
+            f_no_ext = os.path.splitext(f)[0].lower()
+            f_ext = os.path.splitext(f)[1].lower()
+            if f_no_ext == base_no_ext and f_ext in img_extensions:
+                return os.path.join(root, f)
 
     return None
 

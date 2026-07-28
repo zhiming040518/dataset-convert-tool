@@ -85,6 +85,8 @@ def load_labelme_json(json_path: str) -> Optional[Dict]:
 def get_image_path_from_json(json_path: str, json_data: Dict, source_dir: str) -> Optional[str]:
     """根据 JSON 中的 imagePath 查找对应的图片文件
 
+    采用多级搜索策略，尽可能找到对应图片。
+
     Args:
         json_path: JSON 文件的路径
         json_data: 解析后的 JSON 数据
@@ -97,17 +99,51 @@ def get_image_path_from_json(json_path: str, json_data: Dict, source_dir: str) -
     if not image_name:
         return None
 
-    # 尝试多种路径组合
+    json_dir = os.path.dirname(json_path)
+    base = os.path.basename(image_name)
+
+    # 阶段1：精确候选路径匹配
     candidates = [
-        os.path.join(os.path.dirname(json_path), image_name),
-        os.path.join(os.path.dirname(json_path), os.path.basename(image_name)),
+        # JSON 同目录
+        os.path.join(json_dir, image_name),
+        os.path.join(json_dir, base),
+        # JSON 同目录 + imagePath 作为相对路径
+        os.path.normpath(os.path.join(json_dir, image_name)),
+        # 源目录根
         os.path.join(source_dir, image_name),
-        os.path.join(source_dir, os.path.basename(image_name)),
+        os.path.join(source_dir, base),
+        # 源目录下的 images 子目录
+        os.path.join(source_dir, "images", image_name),
+        os.path.join(source_dir, "images", base),
+        # JSON 同目录下的 images 子目录
+        os.path.join(json_dir, "images", image_name),
+        os.path.join(json_dir, "images", base),
     ]
 
     for path in candidates:
         if os.path.isfile(path):
             return path
+
+    # 阶段2：在源目录下递归搜索（按文件名匹配）
+    # 支持常见图片扩展名
+    img_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+    base_no_ext = os.path.splitext(base)[0].lower()
+
+    for root, _, files in os.walk(source_dir):
+        for f in files:
+            # 精确匹配文件名
+            if f == base:
+                return os.path.join(root, f)
+            # 忽略扩展名大小写匹配
+            f_lower = f.lower()
+            name_lower = base.lower()
+            if f_lower == name_lower:
+                return os.path.join(root, f)
+            # 同名但不同扩展名
+            f_no_ext = os.path.splitext(f)[0].lower()
+            f_ext = os.path.splitext(f)[1].lower()
+            if f_no_ext == base_no_ext and f_ext in img_extensions:
+                return os.path.join(root, f)
 
     return None
 
