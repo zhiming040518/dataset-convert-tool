@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
+from PIL import Image, ImageDraw, ImageFont
+
 
 def find_json_files(source_dir: str) -> List[str]:
     """递归查找目录下所有 .json 文件（LabelMe 格式）
@@ -265,3 +267,175 @@ def make_output_dir(path: str) -> str:
     """
     os.makedirs(path, exist_ok=True)
     return os.path.abspath(path)
+
+
+def get_class_colors(classes: List[str]) -> Dict[str, Tuple[int, int, int]]:
+    """为每个类别分配唯一颜色（基于 HSV 色彩空间均匀分布）
+
+    Args:
+        classes: 类别名称列表
+
+    Returns:
+        {class_name: (R, G, B)} 颜色映射字典
+    """
+    colors = {}
+    n = max(len(classes), 1)
+    for i, name in enumerate(classes):
+        hue = i / n
+        r, g, b = _hsv_to_rgb(hue, 1.0, 1.0)
+        colors[name] = (r, g, b)
+    return colors
+
+
+def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
+    """HSV 转 RGB (0-255)
+
+    Args:
+        h: 色调 (0-1)
+        s: 饱和度 (0-1)
+        v: 明度 (0-1)
+
+    Returns:
+        (r, g, b) 各通道 0-255
+    """
+    if s == 0:
+        val = int(v * 255)
+        return val, val, val
+
+    h = h * 6.0
+    i = int(h)
+    f = h - i
+    p = int(v * (1.0 - s) * 255)
+    q = int(v * (1.0 - s * f) * 255)
+    t = int(v * (1.0 - s * (1.0 - f)) * 255)
+    val = int(v * 255)
+
+    if i == 0:
+        return val, t, p
+    elif i == 1:
+        return q, val, p
+    elif i == 2:
+        return p, val, t
+    elif i == 3:
+        return p, q, val
+    elif i == 4:
+        return t, p, val
+    else:
+        return val, p, q
+
+
+def generate_bbox_visualization(image_path: str, bboxes: List[Dict],
+                                  class_colors: Dict[str, Tuple[int, int, int]],
+                                  output_path: str) -> bool:
+    """在原图上绘制 bbox 标注框和标签，生成可视化图片
+
+    Args:
+        image_path: 原图路径
+        bboxes: bbox 列表，每项含 label, xmin, ymin, xmax, ymax
+        class_colors: {class_name: (R, G, B)} 颜色映射
+        output_path: 输出图片路径
+
+    Returns:
+        成功返回 True，失败返回 False
+    """
+    try:
+        img = Image.open(image_path).convert("RGB")
+    except Exception:
+        return False
+
+    draw = ImageDraw.Draw(img)
+
+    # 尝试加载字体，失败则使用默认字体
+    font = None
+    for font_name in ["arial.ttf", "simhei.ttf", "msyh.ttc", "DejaVuSans.ttf"]:
+        try:
+            font = ImageFont.truetype(font_name, 14)
+            break
+        except Exception:
+            continue
+
+    for bbox in bboxes:
+        label = bbox["label"]
+        xmin, ymin = int(bbox["xmin"]), int(bbox["ymin"])
+        xmax, ymax = int(bbox["xmax"]), int(bbox["ymax"])
+
+        color = class_colors.get(label, (255, 0, 0))
+
+        # 画矩形框 (2px 宽)
+        for offset in range(2):
+            draw.rectangle(
+                [xmin - offset, ymin - offset, xmax + offset, ymax + offset],
+                outline=color
+            )
+
+        # 画标签背景色块 + 文字
+        text = label
+        if font:
+            try:
+                text_bbox = draw.textbbox((0, 0), text, font=font)
+            except Exception:
+                text_bbox = (0, 0, len(text) * 8, 14)
+        else:
+            text_bbox = (0, 0, len(text) * 8, 14)
+
+        text_w = text_bbox[2] - text_bbox[0]
+        text_h = text_bbox[3] - text_bbox[1]
+        label_y = max(0, ymin - text_h - 4)
+
+        draw.rectangle(
+            [xmin, label_y, xmin + text_w + 4, label_y + text_h + 4],
+            fill=color
+        )
+        draw.text((xmin + 2, label_y + 2), text, fill=(255, 255, 255), font=font)
+
+    try:
+        img.save(output_path)
+        return True
+    except Exception:
+        return False
+
+
+def generate_mask_visualization(image_path: str,
+                                  masks: Dict[str, "np.ndarray"],
+                                  class_colors: Dict[str, Tuple[int, int, int]],
+                                  output_path: str,
+                                  alpha: float = 0.4) -> bool:
+    """在原图上叠加彩色掩码，生成可视化图片
+
+    Args:
+        image_path: 原图路径
+        masks: {class_name: numpy_mask_array} 掩码字典，mask 值为 0 或 255
+        class_colors: {class_name: (R, G, B)} 颜色映射
+        output_path: 输出图片路径
+        alpha: 掩码叠加透明度 (0~1)
+
+    Returns:
+        成功返回 True，失败返回 False
+    """
+    import numpy as np
+
+    try:
+        img = Image.open(image_path).convert("RGBA")
+    except Exception:
+        return False
+
+    img_array = np.array(img, dtype=np.float64)
+
+    for label, mask_array in masks.items():
+        if mask_array is None or mask_array.size == 0:
+            continue
+        color = class_colors.get(label, (255, 0, 0))
+        fg = mask_array > 0
+
+        for c in range(3):  # R, G, B 三个通道
+            channel = img_array[:, :, c].copy()
+            channel[fg] = channel[fg] * (1 - alpha) + color[c] * alpha
+            img_array[:, :, c] = channel
+
+    result = Image.fromarray(img_array.astype(np.uint8), mode="RGBA")
+    # 转回 RGB 保存
+    try:
+        result.convert("RGB").save(output_path)
+        return True
+    except Exception:
+        return False

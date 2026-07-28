@@ -75,6 +75,8 @@ def _cmd_json2voc(args):
     result = convert_json2voc(src, out)
     print(f"\n[OK] 转换完成！数据集已保存至: {os.path.abspath(out)}")
     print(f"  共处理 {result['total']} 个JSON文件，{result['objects']} 个标注对象")
+    print(f"  复制了 {result.get('copied_images', 0)} 张图片")
+    print(f"  生成了 {result.get('visualizations', 0)} 张可视化图")
     print(f"  类别: {', '.join(result['classes']) if result['classes'] else '无'}")
 
 
@@ -91,6 +93,8 @@ def _cmd_json2yolo(args):
     result = convert_json2yolo(src, out)
     print(f"\n[OK] 转换完成！数据集已保存至: {os.path.abspath(out)}")
     print(f"  共处理 {result['total']} 个JSON文件，{result['objects']} 个标注对象")
+    print(f"  复制了 {result.get('copied_images', 0)} 张图片")
+    print(f"  生成了 {result.get('visualizations', 0)} 张可视化图")
     print(f"  类别 ({len(result['classes'])} 类): {', '.join(result['classes']) if result['classes'] else '无'}")
 
 
@@ -107,6 +111,8 @@ def _cmd_voc2yolo(args):
     result = convert_voc2yolo(src, out)
     print(f"\n[OK] 转换完成！数据集已保存至: {os.path.abspath(out)}")
     print(f"  共处理 {result['total']} 个XML文件，{result['objects']} 个标注对象")
+    print(f"  复制了 {result.get('copied_images', 0)} 张图片")
+    print(f"  生成了 {result.get('visualizations', 0)} 张可视化图")
     print(f"  类别 ({len(result['classes'])} 类): {', '.join(result['classes']) if result['classes'] else '无'}")
 
 
@@ -123,6 +129,8 @@ def _cmd_json2mask(args):
     result = convert_json2mask(src, out)
     print(f"\n[OK] 转换完成！掩码已保存至: {os.path.abspath(out)}")
     print(f"  共处理 {result['total']} 个JSON文件，生成 {result['masks']} 个掩码图像")
+    print(f"  复制了 {result.get('copied_images', 0)} 张图片")
+    print(f"  生成了 {result.get('visualizations', 0)} 张可视化图")
     print(f"  类别 ({len(result['classes'])} 类): {', '.join(result['classes']) if result['classes'] else '无'}")
 
 

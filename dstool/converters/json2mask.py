@@ -10,7 +10,11 @@ from tqdm import tqdm
 from dstool.utils import (
     find_json_files,
     load_labelme_json,
+    get_image_path_from_json,
     collect_class_names,
+    copy_images,
+    get_class_colors,
+    generate_mask_visualization,
     make_output_dir,
 )
 
@@ -88,6 +92,13 @@ def convert_json2mask(source_dir: str, output_dir: str) -> Dict[str, Any]:
     为每个 JSON 文件中每个类别的标注生成对应的二值掩码 PNG 文件。
     掩码文件命名: {image_name}_{label}.png
 
+    输出结构:
+        output_dir/
+        ├── images/              # 原始图片
+        ├── visualizations/      # 掩码叠加可视化图
+        ├── {name}_{label}.png   # 各掩码文件
+        └── label_colors.txt     # 类别颜色参考
+
     Args:
         source_dir: 包含 JSON 文件的源目录
         output_dir: 输出目录
@@ -98,10 +109,13 @@ def convert_json2mask(source_dir: str, output_dir: str) -> Dict[str, Any]:
     source_dir = os.path.abspath(source_dir)
     output_dir = make_output_dir(output_dir)
 
+    img_dir = make_output_dir(os.path.join(output_dir, "images"))
+    viz_dir = make_output_dir(os.path.join(output_dir, "visualizations"))
+
     json_files = find_json_files(source_dir)
     if not json_files:
         print(f"错误: 在 {source_dir} 中未找到 JSON 文件")
-        return {"total": 0, "masks": 0, "classes": []}
+        return {"total": 0, "masks": 0, "classes": [], "copied_images": 0, "visualizations": 0}
 
     print(f"找到 {len(json_files)} 个 JSON 文件")
 
@@ -113,11 +127,14 @@ def convert_json2mask(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
     if not all_data:
         print("错误: 没有有效的 JSON 标注文件")
-        return {"total": 0, "masks": 0, "classes": []}
+        return {"total": 0, "masks": 0, "classes": [], "copied_images": 0, "visualizations": 0}
 
     classes = collect_class_names(all_data)
+    class_colors = get_class_colors(classes)
     total_masks = 0
     processed = 0
+    image_paths = []
+    viz_count = 0
 
     for json_path, data in tqdm(all_data, desc="转换 JSON→Mask"):
         image_filename = os.path.basename(data.get("imagePath", ""))
@@ -151,6 +168,23 @@ def convert_json2mask(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
         processed += 1
 
+        # 查找图片路径
+        img_path = get_image_path_from_json(json_path, data, source_dir)
+        image_paths.append(img_path)
+
+        # 生成掩码叠加可视化
+        if img_path and os.path.isfile(img_path) and label_masks:
+            viz_path = os.path.join(viz_dir, f"{base_name}.jpg")
+            if generate_mask_visualization(img_path, label_masks, class_colors, viz_path):
+                viz_count += 1
+
+    # 复制图片文件
+    copied = copy_images(source_dir, img_dir, image_paths)
+    if copied:
+        print(f"  复制了 {copied} 张图片到 {img_dir}")
+    if viz_count:
+        print(f"  生成了 {viz_count} 张可视化图到 {viz_dir}")
+
     # 保存类别颜色映射文件
     _save_label_colors(output_dir, classes)
 
@@ -158,6 +192,8 @@ def convert_json2mask(source_dir: str, output_dir: str) -> Dict[str, Any]:
         "total": processed,
         "masks": total_masks,
         "classes": classes,
+        "copied_images": copied,
+        "visualizations": viz_count,
     }
 
 

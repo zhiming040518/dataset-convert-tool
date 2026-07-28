@@ -2,15 +2,62 @@
 
 import os
 import xml.etree.ElementTree as ET
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from tqdm import tqdm
 
 from dstool.utils import (
     find_xml_files,
     yolo_bbox,
+    copy_images,
+    get_class_colors,
+    generate_bbox_visualization,
     make_output_dir,
 )
+
+
+def _find_voc_image(filename: str, source_dir: str) -> Optional[str]:
+    """在 VOC 目录结构中查找图片文件
+
+    查找策略:
+        1. source_dir/JPEGImages/
+        2. source_dir/../JPEGImages/（source_dir 可能是 Annotations/）
+        3. source_dir/ 及子目录下递归匹配
+
+    Args:
+        filename: XML 中的图片文件名
+        source_dir: 用户传入的源目录
+
+    Returns:
+        图片路径，找不到返回 None
+    """
+    if not filename:
+        return None
+
+    # 策略1: source_dir/JPEGImages/
+    jpeg_dir = os.path.join(source_dir, "JPEGImages")
+    if os.path.isdir(jpeg_dir):
+        img_path = os.path.join(jpeg_dir, filename)
+        if os.path.isfile(img_path):
+            return img_path
+
+    # 策略2: source_dir/../JPEGImages/（用户可能传了 Annotations/ 目录）
+    parent_jpeg = os.path.join(os.path.dirname(source_dir), "JPEGImages")
+    if os.path.isdir(parent_jpeg):
+        img_path = os.path.join(parent_jpeg, filename)
+        if os.path.isfile(img_path):
+            return img_path
+
+    # 策略3: 递归搜索
+    basename = os.path.basename(filename)
+    for root, _, files in os.walk(source_dir):
+        for f in files:
+            if f == basename:
+                img_ext = os.path.splitext(f)[1].lower()
+                if img_ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"):
+                    return os.path.join(root, f)
+
+    return None
 
 
 def _parse_voc_xml(xml_path: str) -> dict:
@@ -71,7 +118,9 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
     YOLO 输出结构:
         output_dir/
+        ├── images/
         ├── labels/
+        ├── visualizations/
         ├── classes.txt
         └── dataset.yaml
 
@@ -86,13 +135,15 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
     output_dir = make_output_dir(output_dir)
 
     labels_dir = make_output_dir(os.path.join(output_dir, "labels"))
+    img_dir = make_output_dir(os.path.join(output_dir, "images"))
+    viz_dir = make_output_dir(os.path.join(output_dir, "visualizations"))
 
     # 自动检测 VOC 目录结构
     xml_files = find_xml_files(source_dir, use_voc_structure=True)
     if not xml_files:
         print(f"错误: 在 {source_dir} 中未找到 XML 文件")
         print(f"提示: 如果是VOC格式，确保 XML 文件在 Annotations/ 目录下")
-        return {"total": 0, "objects": 0, "classes": []}
+        return {"total": 0, "objects": 0, "classes": [], "copied_images": 0, "visualizations": 0}
 
     print(f"找到 {len(xml_files)} 个 XML 文件")
 
@@ -110,13 +161,16 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
     if not all_parsed:
         print("错误: 没有有效的 XML 标注文件")
-        return {"total": 0, "objects": 0, "classes": []}
+        return {"total": 0, "objects": 0, "classes": [], "copied_images": 0, "visualizations": 0}
 
     classes = sorted(class_set)
     class_to_id = {name: i for i, name in enumerate(classes)}
+    class_colors = get_class_colors(classes)
 
     total_objects = 0
     processed = 0
+    image_paths = []
+    viz_count = 0
 
     for parsed in tqdm(all_parsed, desc="转换 VOC→YOLO"):
         filename = parsed["filename"]
@@ -126,6 +180,10 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
         if img_width <= 0 or img_height <= 0:
             print(f"  警告: {filename} 图像尺寸无效，跳过")
             continue
+
+        # 查找图片路径
+        img_path = _find_voc_image(filename, source_dir)
+        image_paths.append(img_path)
 
         # 生成 YOLO 标注文件
         label_name = os.path.splitext(filename)[0] + ".txt"
@@ -143,6 +201,20 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
         total_objects += len(parsed["objects"])
         processed += 1
 
+        # 生成可视化图片
+        if img_path and os.path.isfile(img_path):
+            img_base = os.path.splitext(filename)[0]
+            viz_path = os.path.join(viz_dir, f"{img_base}.jpg")
+            if generate_bbox_visualization(img_path, parsed["objects"], class_colors, viz_path):
+                viz_count += 1
+
+    # 复制图片文件
+    copied = copy_images(source_dir, img_dir, image_paths)
+    if copied:
+        print(f"  复制了 {copied} 张图片到 {img_dir}")
+    if viz_count:
+        print(f"  生成了 {viz_count} 张可视化图到 {viz_dir}")
+
     # 生成 classes.txt
     classes_path = os.path.join(output_dir, "classes.txt")
     with open(classes_path, "w", encoding="utf-8") as f:
@@ -155,8 +227,8 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
         f.write(f"# YOLO 数据集配置文件\n")
         f.write(f"# 由 dstool 自动生成 (从 VOC 转换)\n\n")
         f.write(f"path: {os.path.abspath(output_dir).replace(os.sep, '/')}\n")
-        f.write(f"train: labels\n")
-        f.write(f"val: labels\n\n")
+        f.write(f"train: images\n")
+        f.write(f"val: images\n\n")
         f.write(f"nc: {len(classes)}\n")
         f.write(f"names: {classes}\n")
 
@@ -164,4 +236,6 @@ def convert_voc2yolo(source_dir: str, output_dir: str) -> Dict[str, Any]:
         "total": processed,
         "objects": total_objects,
         "classes": classes,
+        "copied_images": copied,
+        "visualizations": viz_count,
     }

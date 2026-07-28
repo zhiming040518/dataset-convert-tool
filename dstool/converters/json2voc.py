@@ -14,6 +14,8 @@ from dstool.utils import (
     shapes_to_bboxes,
     collect_class_names,
     copy_images,
+    get_class_colors,
+    generate_bbox_visualization,
     make_output_dir,
 )
 
@@ -85,12 +87,13 @@ def convert_json2voc(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
     ann_dir = make_output_dir(os.path.join(output_dir, "Annotations"))
     img_dir = make_output_dir(os.path.join(output_dir, "JPEGImages"))
+    viz_dir = make_output_dir(os.path.join(output_dir, "visualizations"))
     sets_dir = make_output_dir(os.path.join(output_dir, "ImageSets", "Main"))
 
     json_files = find_json_files(source_dir)
     if not json_files:
         print(f"错误: 在 {source_dir} 中未找到 JSON 文件")
-        return {"total": 0, "objects": 0, "classes": []}
+        return {"total": 0, "objects": 0, "classes": [], "copied_images": 0, "visualizations": 0}
 
     print(f"找到 {len(json_files)} 个 JSON 文件")
 
@@ -102,12 +105,14 @@ def convert_json2voc(source_dir: str, output_dir: str) -> Dict[str, Any]:
 
     if not all_data:
         print("错误: 没有有效的 JSON 标注文件")
-        return {"total": 0, "objects": 0, "classes": []}
+        return {"total": 0, "objects": 0, "classes": [], "copied_images": 0, "visualizations": 0}
 
     classes = collect_class_names(all_data)
+    class_colors = get_class_colors(classes)
     total_objects = 0
     processed = 0
     image_paths = []
+    viz_count = 0
 
     for json_path, data in tqdm(all_data, desc="转换 JSON→VOC"):
         image_filename = os.path.basename(data.get("imagePath", ""))
@@ -133,10 +138,20 @@ def convert_json2voc(source_dir: str, output_dir: str) -> Dict[str, Any]:
         img_path = get_image_path_from_json(json_path, data, source_dir)
         image_paths.append(img_path)
 
+        # 生成可视化图片
+        if img_path and os.path.isfile(img_path):
+            img_base = os.path.splitext(image_filename)[0]
+            viz_path = os.path.join(viz_dir, f"{img_base}.jpg")
+            if generate_bbox_visualization(img_path, bboxes, class_colors, viz_path):
+                viz_count += 1
+
     # 复制图片文件
-    if image_paths:
-        copied = copy_images(source_dir, img_dir, image_paths)
+    copied = copy_images(source_dir, img_dir, image_paths)
+    if copied:
         print(f"  复制了 {copied} 张图片到 {img_dir}")
+
+    if viz_count:
+        print(f"  生成了 {viz_count} 张可视化图到 {viz_dir}")
 
     # 生成 ImageSets/Main/train.txt
     img_names = []
@@ -154,4 +169,6 @@ def convert_json2voc(source_dir: str, output_dir: str) -> Dict[str, Any]:
         "total": processed,
         "objects": total_objects,
         "classes": classes,
+        "copied_images": copied,
+        "visualizations": viz_count,
     }
