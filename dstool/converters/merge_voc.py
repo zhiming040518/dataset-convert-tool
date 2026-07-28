@@ -136,15 +136,12 @@ def convert_merge_voc(
     stats: Dict[str, Dict] = {}
     total_xml = 0
     total_images = 0
-    # 文件名冲突跟踪
-    used_basenames: set = set()
-
     for split_name, src_dir in active_splits:
         src_ann, src_jpeg = _resolve_voc_dirs(src_dir)
 
         xml_files = _list_xml_files(src_ann)
 
-        # 生成该分集的文件名列表（不含后缀，防冲突加前缀）
+        # 生成该分集的文件名列表（不含后缀）
         file_names: List[str] = []
         # 构建源图片索引：{原名（不含后缀）: 扩展名}
         src_img_index: Dict[str, str] = {}
@@ -157,14 +154,9 @@ def convert_merge_voc(
         for xml_file in xml_files:
             base = os.path.splitext(xml_file)[0]
 
-            # 复制 XML（防文件名冲突加前缀）
-            if base.lower() in used_basenames:
-                dst_xml_name = f"{split_name}_{xml_file}"
-                dst_base = f"{split_name}_{base}"
-            else:
-                dst_xml_name = xml_file
-                dst_base = base
-            used_basenames.add(dst_base.lower())
+            # 复制 XML
+            dst_xml_name = xml_file
+            dst_base = base
             dst_xml_path = os.path.join(ann_dir, dst_xml_name)
             if not os.path.exists(dst_xml_path):
                 shutil.copy2(os.path.join(src_ann, xml_file), dst_xml_path)
@@ -175,13 +167,8 @@ def convert_merge_voc(
         img_exts = [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"]
         for fn in file_names:
             dst_img_path = None
-            # 如果文件名带了前缀，去掉前缀找原始文件名
-            if fn.startswith(f"{split_name}_"):
-                orig_fn = fn[len(split_name) + 1:]
-            else:
-                orig_fn = fn
-
             # 先在索引中精确匹配
+            orig_fn = fn
             if orig_fn in src_img_index:
                 ext = src_img_index[orig_fn]
                 dst_img_path = os.path.join(jpeg_dir, fn + ext)

@@ -233,9 +233,6 @@ def convert_merge_yolo(
     stats: Dict[str, Dict] = {}
     total_images = 0
     total_labels = 0
-    # 记录已用文件名，防止不同分集之间文件名冲突
-    used_filenames: set = set()
-
     for split_name, src_dir, images_dir, labels_dir in split_infos:
 
         out_img_dir = make_output_dir(os.path.join(output_dir, "images", split_name))
@@ -269,14 +266,8 @@ def convert_merge_yolo(
                 # 没有标注文件也复制图片（纯推理集）
                 pass
 
-            # 防止文件名冲突：如果冲突加 split 前缀
-            dst_img_name = img_file
-            if dst_img_name.lower() in used_filenames:
-                name_part, ext_part = os.path.splitext(img_file)
-                dst_img_name = f"{split_name}_{name_part}{ext_part}"
-            used_filenames.add(dst_img_name.lower())
-
             # 复制图片
+            dst_img_name = img_file
             dst_img_path = os.path.join(out_img_dir, dst_img_name)
             if not os.path.exists(dst_img_path):
                 shutil.copy2(img_path, dst_img_path)
