@@ -33,6 +33,22 @@ def _get_output_path(prompt: str, default: str) -> str:
     return os.path.abspath(user_input)
 
 
+def _get_int(prompt: str, default: int) -> int:
+    """交互式获取正整数输入"""
+    user_input = input(prompt).strip()
+    if not user_input:
+        return default
+    try:
+        value = int(user_input)
+    except ValueError:
+        print(f"  输入无效，使用默认值 {default}")
+        return default
+    if value <= 0:
+        print(f"  需为正整数，使用默认值 {default}")
+        return default
+    return value
+
+
 def _resolve_paths(src: Optional[str], output: Optional[str],
                    src_prompt: str, output_suffix: str) -> Tuple[str, str]:
     """统一处理路径解析
@@ -254,6 +270,109 @@ def _cmd_merge_voc(args):
     print(f"  合计: {result['total_xml']} 个 XML, {result['total_images']} 张图片")
 
 
+def _cmd_rename_yolo(args):
+    """rename-yolo 命令处理"""
+    from dstool.converters.rename_yolo import convert_rename_yolo, sanitize_prefix
+
+    has_args = bool(args.src or args.prefix or args.output or args.inplace)
+    output_suffix = "_renamed"
+
+    if not has_args:
+        # 纯交互模式
+        print("重命名 YOLO 数据集（图片与标注同步重命名）\n")
+        print("请选择操作方式:")
+        print("  [1] 复制到新目录（保留原数据集）")
+        print("  [2] 原地重命名（直接修改原数据集）")
+        mode = input("请选择 (1/2，留空使用 1): ").strip()
+        inplace = mode == "2"
+
+        src_dir = _get_input_path("请输入数据集路径 (留空使用当前目录): ", os.getcwd())
+
+        prefix = ""
+        while not prefix:
+            prefix = sanitize_prefix(input("请输入新文件名前缀 (如 six-axis): "))
+            if not prefix:
+                print("  前缀不能为空且不能只包含非法字符，请重新输入")
+
+        if inplace:
+            output_dir = None
+        else:
+            default_output = os.path.join(
+                os.path.dirname(src_dir),
+                os.path.basename(src_dir) + output_suffix
+            )
+            output_dir = _get_input_path(
+                f"请输入输出路径 (留空使用 {default_output}): ",
+                default_output
+            )
+
+        start = _get_int("请输入起始序号 (留空使用 1): ", 1)
+        digits = _get_int("请输入序号位数 (留空使用 4): ", 4)
+    else:
+        # 参数模式
+        if not args.src or not args.prefix:
+            print("错误: 参数模式需要同时提供 -src 和 -prefix")
+            print("  示例: dstool rename-yolo -src ./dataset -prefix six-axis -inplace")
+            return
+        if args.output and args.inplace:
+            print("错误: -output 与 -inplace 不能同时使用")
+            return
+
+        src_dir = os.path.abspath(args.src)
+        prefix = sanitize_prefix(args.prefix)
+        inplace = bool(args.inplace)
+        if inplace:
+            output_dir = None
+        elif args.output:
+            output_dir = os.path.abspath(args.output)
+        else:
+            output_dir = os.path.join(
+                os.path.dirname(src_dir),
+                os.path.basename(src_dir) + output_suffix
+            )
+        start = args.start if args.start is not None else 1
+        digits = args.digits if args.digits is not None else 4
+        if start < 1 or digits < 1:
+            print("错误: -start 与 -digits 需为正整数")
+            return
+
+    if not prefix:
+        print("错误: 前缀为空或只包含非法字符")
+        return
+
+    print(f"\n源路径:   {src_dir}")
+    print(f"操作方式: {'原地重命名' if inplace else '复制到新目录'}")
+    if output_dir:
+        print(f"输出路径: {output_dir}")
+    print(f"命名规则: {prefix}_<分集>_<序号>   起始序号 {start}, {digits} 位\n")
+
+    result = convert_rename_yolo(
+        src_dir, prefix,
+        output_dir=output_dir, inplace=inplace, start=start, digits=digits
+    )
+
+    if result["total_images"] == 0:
+        return
+
+    for split_name, s in result["splits"].items():
+        print(f"  [{split_name}] {s['images']} 张图片, {s['labels']} 个标注")
+
+    print(f"\n[OK] 重命名完成！共 {result['total_images']} 张图片, "
+          f"{result['total_labels']} 个标注")
+    if result["output_dir"]:
+        print(f"  输出目录: {result['output_dir']}")
+    if result["overwritten"]:
+        print(f"  覆盖了 {result['overwritten']} 个同名文件")
+    if result["updated_lists"]:
+        print(f"  同步更新了 {len(result['updated_lists'])} 个图片清单:")
+        for path in result["updated_lists"]:
+            print(f"    {path}")
+    if result["map_file"]:
+        print(f"  重命名映射表: {result['map_file']}")
+    if result["orphan_labels"]:
+        print(f"  提示: {result['orphan_labels']} 个标注没有对应图片，已保持原名")
+
+
 def main():
     """dstool 主入口"""
     parser = argparse.ArgumentParser(
@@ -269,6 +388,7 @@ def main():
   dstool json2mask -src ./labels -output ./masks
   dstool merge-yolo -train ./train_set -val ./val_set -test ./test_set -output ./full_yolo
   dstool merge-voc  -train ./train_voc -val ./val_voc -test ./test_voc -output ./full_voc
+  dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
         """),
     )
 
@@ -344,6 +464,31 @@ def main():
     p_merge_voc.add_argument("-test", type=str, help="测试集目录路径（VOC 格式）")
     p_merge_voc.add_argument("-output", type=str, help="输出目录路径")
 
+    # ---- rename-yolo ----
+    p_rename_yolo = subparsers.add_parser(
+        "rename-yolo",
+        help="按顺序重命名 YOLO 数据集中的图片与标注文件",
+        description="将 YOLO 数据集中的图片与同名标注文件按顺序重新编号，"
+                    "命名格式为 {前缀}_{分集}_{序号}，如 six-axis_train_0001.jpg",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+        示例:
+          dstool rename-yolo
+          dstool rename-yolo -src ./dataset -prefix six-axis -inplace
+          dstool rename-yolo -src ./dataset -prefix six-axis -output ./dataset_new
+          dstool rename-yolo -src ./dataset -prefix six-axis -inplace -start 1 -digits 6
+        """),
+    )
+    p_rename_yolo.add_argument("-src", type=str, help="YOLO 数据集根目录（含 images/、labels/）")
+    p_rename_yolo.add_argument("-prefix", type=str,
+                               help="新文件名前缀，如 six-axis（参数模式下必填）")
+    p_rename_yolo.add_argument("-output", type=str,
+                               help="输出目录；省略时默认在源目录同级创建 <源目录名>_renamed")
+    p_rename_yolo.add_argument("-inplace", action="store_true",
+                               help="原地重命名，直接修改原数据集（与 -output 互斥）")
+    p_rename_yolo.add_argument("-start", type=int, help="每个分集的起始序号（默认 1）")
+    p_rename_yolo.add_argument("-digits", type=int, help="序号位数，不足补零（默认 4）")
+
     # 解析参数
     args = parser.parse_args()
 
@@ -359,6 +504,7 @@ def main():
         "json2mask": _cmd_json2mask,
         "merge-yolo": _cmd_merge_yolo,
         "merge-voc": _cmd_merge_voc,
+        "rename-yolo": _cmd_rename_yolo,
     }
 
     handler = handlers.get(args.command)

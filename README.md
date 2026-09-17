@@ -17,6 +17,7 @@ LabelMe JSON  ──→  Pixel Mask PNG   (json2mask)
 ```
 多数据集合并  ──→  完整 YOLO 数据集  (merge-yolo)
 多数据集合并  ──→  完整 VOC 数据集   (merge-voc)
+YOLO 数据集重命名（图片 + 标注同步）  (rename-yolo)
 ```
 
 ---
@@ -32,6 +33,7 @@ LabelMe JSON  ──→  Pixel Mask PNG   (json2mask)
   - [dstool json2mask](#dstool-json2mask)
   - [dstool merge-yolo](#dstool-merge-yolo)
   - [dstool merge-voc](#dstool-merge-voc)
+  - [dstool rename-yolo](#dstool-rename-yolo)
 - [LabelMe JSON 输入格式](#labelme-json-输入格式)
 - [输出格式说明](#输出格式说明)
 - [使用场景示例](#使用场景示例)
@@ -119,6 +121,7 @@ dstool voc2yolo  -src ./VOC2007  -output ./YOLO_dataset
 dstool json2mask -src ./labels   -output ./masks
 dstool merge-yolo -train ./train_set -val ./val_set -test ./test_set -output ./full_yolo
 dstool merge-voc  -train ./train_voc -val ./val_voc -test ./test_voc -output ./full_voc
+dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
 
 # 交互模式（适合不熟悉命令行的用户）
 dstool json2voc
@@ -424,6 +427,85 @@ full_voc/
 
 ---
 
+### dstool rename-yolo
+
+把 YOLO 数据集中的图片按顺序重新编号，**同名的标注 txt 会一起改名**，训练集、验证集、测试集分别编号，命名格式为 `{前缀}_{分集}_{序号}`：
+
+```
+six-axis_train_0001.jpg     ← 训练集
+six-axis_train_0002.jpg
+six-axis_val_0001.jpg       ← 验证集独立从 0001 开始
+six-axis_val_0002.jpg
+```
+
+分集名插在前缀与序号之间，因此不同分集之间不会出现同名文件，之后合并数据集也不会冲突。
+
+```bash
+# 原地重命名（直接修改原数据集）
+dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
+
+# 复制到新目录（原数据集不动）
+dstool rename-yolo -src ./full_yolo -prefix six-axis -output ./full_yolo_new
+
+# 交互模式
+dstool rename-yolo
+```
+
+**参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `-src` | YOLO 数据集根目录，参数模式下必填 |
+| `-prefix` | 新文件名前缀（如 `six-axis`），参数模式下必填 |
+| `-output` | 输出目录，省略时默认在源目录同级创建 `<源目录名>_renamed` |
+| `-inplace` | 原地重命名，直接修改原数据集（与 `-output` 互斥） |
+| `-start` | 每个分集的起始序号，默认 `1` |
+| `-digits` | 序号位数，不足补零，默认 `4`；序号超出时自动加宽 |
+
+**支持的目录结构**（自动识别）：
+
+| 结构 | 示例 |
+|------|------|
+| 分集在 images 下（merge-yolo 输出） | `images/train/`、`labels/train/` |
+| 分集在数据集下（Roboflow 风格） | `train/images/`、`train/labels/` |
+| 单层结构 | `images/`、`labels/` |
+| 文件直接放在根目录 | `xxx.jpg`、`xxx.txt` |
+| 非标准目录名 | `photos/`、`txt_ann/`（按扩展名占比自动检测） |
+
+没有对应标注的图片也会重命名（如纯推理集）；没有对应图片的标注会保持原名并统计提示。
+
+**同步处理的文件**：
+
+- `train.txt` / `val.txt` / `test.txt` / `ImageSets/Main/*.txt`：清单里指向本次重命名图片的行会更新为新文件名（只改写匹配到的行）
+- 复制模式下 `classes.txt`、`dataset.yaml`、`data.yaml` 会一并复制，且 `dataset.yaml` 中的 `path` 会改写为新的数据集路径
+- 输出目录中生成 `rename_map.txt` 记录 `旧文件名 -> 新文件名` 的映射，便于核对与回退
+
+**安全机制**：
+
+- 原地重命名采用「先改临时名、再改目标名」两阶段执行，避免新旧文件名相互占用；中途失败会自动回滚
+- 若目标文件名已被计划外的文件占用，会**中止并列出冲突**（提示更换前缀），不会覆盖数据
+- 用同一前缀重复执行是安全的（每个文件映射到自己，等于空操作）
+
+**终端输出示例**：
+
+```
+源路径:   /home/user/full_yolo
+操作方式: 原地重命名
+命名规则: six-axis_<分集>_<序号>   起始序号 1, 4 位
+
+开始原地重命名 10 个文件 ...
+  [train] 3 张图片, 3 个标注
+  [val] 2 张图片, 2 个标注
+
+[OK] 重命名完成！共 5 张图片, 5 个标注
+  同步更新了 2 个图片清单:
+    /home/user/full_yolo/train.txt
+    /home/user/full_yolo/val.txt
+  重命名映射表: /home/user/full_yolo/rename_map.txt
+```
+
+---
+
 ## LabelMe JSON 输入格式
 
 dstool 接受标准的 **LabelMe** 标注格式。每个 JSON 文件对应一张图片的标注信息。
@@ -642,6 +724,20 @@ dstool merge-yolo -train ./yolo_train -val ./yolo_val -test ./yolo_test -output 
 dstool merge-voc -train ./voc_part1 -val ./voc_part2 -test ./voc_part3 -output ./voc_full
 ```
 
+### 场景 7：标注完成后统一重排图片编号
+
+标注时图片名往往五花八门（手机导出、截图、爬取的乱码名），训练前统一重排成 `前缀_分集_序号`：
+
+```bash
+# 先合并成完整数据集，再原地重命名
+dstool merge-yolo -train ./yolo_train -val ./yolo_val -test ./yolo_test -output ./full_yolo
+dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
+
+# 结果：full_yolo/images/train/six-axis_train_0001.jpg（标注同名同步）
+```
+
+重命名后 `rename_map.txt` 里保存了新旧文件名对照，需要回退时按表改回即可。
+
 ---
 
 ## 依赖
@@ -716,7 +812,8 @@ dstool/
 │       ├── voc2yolo.py      # VOC XML → YOLO txt
 │       ├── json2mask.py     # LabelMe JSON → Pixel Mask PNG
 │       ├── merge_yolo.py    # 合并 YOLO 数据集（智能目录检测）
-│       └── merge_voc.py     # 合并 VOC 数据集（智能目录检测）
+│       ├── merge_voc.py     # 合并 VOC 数据集（智能目录检测）
+│       └── rename_yolo.py   # YOLO 数据集重命名（图片 + 标注同步）
 └── test_data/
     └── json_labels/         # 测试用 LabelMe JSON 示例
 ```
