@@ -395,6 +395,101 @@ def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
         return val, p, q
 
 
+def load_visualization_font(size: int = 14):
+    """加载可视化用的字体，全部失败时返回 None（PIL 会退回默认位图字体）
+
+    Args:
+        size: 字号
+
+    Returns:
+        ImageFont 对象或 None
+    """
+    for font_name in ["arial.ttf", "simhei.ttf", "msyh.ttc", "DejaVuSans.ttf"]:
+        try:
+            return ImageFont.truetype(font_name, size)
+        except Exception:
+            continue
+    return None
+
+
+def draw_bboxes(draw, bboxes: List[Dict],
+                class_colors: Dict[str, Tuple[int, int, int]],
+                font=None) -> None:
+    """在已打开的图片上绘制 bbox 标注框和标签（就地修改）
+
+    Args:
+        draw: ImageDraw 对象
+        bboxes: bbox 列表，每项含 label, xmin, ymin, xmax, ymax
+        class_colors: {class_name: (R, G, B)} 颜色映射
+        font: 字体对象，None 时自动加载
+    """
+    if font is None:
+        font = load_visualization_font()
+
+    for bbox in bboxes:
+        label = bbox["label"]
+        xmin, ymin = int(bbox["xmin"]), int(bbox["ymin"])
+        xmax, ymax = int(bbox["xmax"]), int(bbox["ymax"])
+
+        color = class_colors.get(label, (255, 0, 0))
+        _draw_bbox(draw, xmin, ymin, xmax, ymax, label, color, font)
+
+
+def _draw_bbox(draw, xmin: int, ymin: int, xmax: int, ymax: int,
+               label: str, color: Tuple[int, int, int], font) -> None:
+    """画单个 bbox：2px 边框 + 类别标签底色块"""
+    # 画矩形框 (2px 宽)
+    for offset in range(2):
+        draw.rectangle(
+            [xmin - offset, ymin - offset, xmax + offset, ymax + offset],
+            outline=color
+        )
+
+    # 画标签背景色块 + 文字
+    text = label
+    if font:
+        try:
+            text_bbox = draw.textbbox((0, 0), text, font=font)
+        except Exception:
+            text_bbox = (0, 0, len(text) * 8, 14)
+    else:
+        text_bbox = (0, 0, len(text) * 8, 14)
+
+    text_w = text_bbox[2] - text_bbox[0]
+    text_h = text_bbox[3] - text_bbox[1]
+    label_y = max(0, ymin - text_h - 4)
+
+    draw.rectangle(
+        [xmin, label_y, xmin + text_w + 4, label_y + text_h + 4],
+        fill=color
+    )
+    draw.text((xmin + 2, label_y + 2), text, fill=(255, 255, 255), font=font)
+
+
+def generate_bbox_visualization_from_image(img, bboxes: List[Dict],
+                                             class_colors: Dict[str, Tuple[int, int, int]],
+                                             output_path: str) -> bool:
+    """在内存中的 PIL Image 上绘制 bbox 并保存（不会修改传入的图片）
+
+    Args:
+        img: PIL Image 对象
+        bboxes: bbox 列表，每项含 label, xmin, ymin, xmax, ymax
+        class_colors: {class_name: (R, G, B)} 颜色映射
+        output_path: 输出图片路径
+
+    Returns:
+        成功返回 True，失败返回 False
+    """
+    canvas = img.copy()
+    draw_bboxes(ImageDraw.Draw(canvas), bboxes, class_colors)
+
+    try:
+        canvas.save(output_path)
+        return True
+    except Exception:
+        return False
+
+
 def generate_bbox_visualization(image_path: str, bboxes: List[Dict],
                                   class_colors: Dict[str, Tuple[int, int, int]],
                                   output_path: str) -> bool:
@@ -414,56 +509,7 @@ def generate_bbox_visualization(image_path: str, bboxes: List[Dict],
     except Exception:
         return False
 
-    draw = ImageDraw.Draw(img)
-
-    # 尝试加载字体，失败则使用默认字体
-    font = None
-    for font_name in ["arial.ttf", "simhei.ttf", "msyh.ttc", "DejaVuSans.ttf"]:
-        try:
-            font = ImageFont.truetype(font_name, 14)
-            break
-        except Exception:
-            continue
-
-    for bbox in bboxes:
-        label = bbox["label"]
-        xmin, ymin = int(bbox["xmin"]), int(bbox["ymin"])
-        xmax, ymax = int(bbox["xmax"]), int(bbox["ymax"])
-
-        color = class_colors.get(label, (255, 0, 0))
-
-        # 画矩形框 (2px 宽)
-        for offset in range(2):
-            draw.rectangle(
-                [xmin - offset, ymin - offset, xmax + offset, ymax + offset],
-                outline=color
-            )
-
-        # 画标签背景色块 + 文字
-        text = label
-        if font:
-            try:
-                text_bbox = draw.textbbox((0, 0), text, font=font)
-            except Exception:
-                text_bbox = (0, 0, len(text) * 8, 14)
-        else:
-            text_bbox = (0, 0, len(text) * 8, 14)
-
-        text_w = text_bbox[2] - text_bbox[0]
-        text_h = text_bbox[3] - text_bbox[1]
-        label_y = max(0, ymin - text_h - 4)
-
-        draw.rectangle(
-            [xmin, label_y, xmin + text_w + 4, label_y + text_h + 4],
-            fill=color
-        )
-        draw.text((xmin + 2, label_y + 2), text, fill=(255, 255, 255), font=font)
-
-    try:
-        img.save(output_path)
-        return True
-    except Exception:
-        return False
+    return generate_bbox_visualization_from_image(img, bboxes, class_colors, output_path)
 
 
 def generate_mask_visualization(image_path: str,

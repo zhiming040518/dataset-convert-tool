@@ -373,6 +373,124 @@ def _cmd_rename_yolo(args):
         print(f"  提示: {result['orphan_labels']} 个标注没有对应图片，已保持原名")
 
 
+def _cmd_crop_dataset(args):
+    """crop-dataset 命令处理"""
+    from dstool.converters.crop_dataset import DEFAULT_SIZE, convert_crop_dataset
+    from dstool.converters.rename_yolo import sanitize_prefix
+
+    has_args = bool(args.src or args.output or args.prefix)
+    output_suffix = "_cropped"
+
+    if not has_args:
+        # 纯交互模式
+        print("按目标裁剪数据集（YOLO / VOC，每个目标生成一张小图）\n")
+        src_dir = _get_input_path("请输入数据集路径 (留空使用当前目录): ", os.getcwd())
+
+        default_output = os.path.join(
+            os.path.dirname(src_dir),
+            os.path.basename(src_dir) + output_suffix
+        )
+        output_dir = _get_input_path(
+            f"请输入输出路径 (留空使用 {default_output}): ",
+            default_output
+        )
+
+        prefix = ""
+        while not prefix:
+            prefix = sanitize_prefix(input("请输入新文件名前缀 (如 six-axis): "))
+            if not prefix:
+                print("  前缀不能为空且不能只包含非法字符，请重新输入")
+
+        size = _get_int("请输入裁剪尺寸 (留空使用 512): ", DEFAULT_SIZE)
+        start = _get_int("请输入起始序号 (留空使用 1): ", 1)
+        digits = _get_int("请输入序号位数 (留空使用 4): ", 4)
+        visualizations = input(
+            "是否生成可视化图? [1] 是  [2] 否 (留空使用 1): "
+        ).strip() != "2"
+        quality = 95
+        ext = "jpg"
+        limit = 0
+        comparisons = visualizations
+    else:
+        # 参数模式
+        if not args.src or not args.prefix:
+            print("错误: 参数模式需要同时提供 -src 和 -prefix")
+            print("  示例: dstool crop-dataset -src ./dataset -prefix six-axis -output ./cropped")
+            return
+
+        src_dir = os.path.abspath(args.src)
+        output_dir = os.path.abspath(args.output) if args.output else os.path.join(
+            os.path.dirname(src_dir),
+            os.path.basename(src_dir) + output_suffix
+        )
+        prefix = args.prefix
+        size = args.size if args.size is not None else DEFAULT_SIZE
+        start = args.start if args.start is not None else 1
+        digits = args.digits if args.digits is not None else 4
+        quality = args.quality if args.quality is not None else 95
+        ext = args.ext if args.ext else "jpg"
+        limit = args.limit if args.limit else 0
+        visualizations = not args.no_viz
+        comparisons = not args.no_compare
+
+        if size < 1 or start < 1 or digits < 1 or limit < 0:
+            print("错误: -size / -start / -digits 需为正整数，-limit 不能为负")
+            return
+        if not 1 <= quality <= 100:
+            print("错误: -quality 需要在 1~100 之间")
+            return
+
+    print(f"\n源路径:   {src_dir}")
+    print(f"输出路径: {output_dir}")
+    print(f"命名规则: {prefix}_<分集>_<序号>   起始序号 {start}, {digits} 位")
+    print(f"裁剪窗口: {size}x{size}\n")
+
+    result = convert_crop_dataset(
+        src_dir, prefix, output_dir=output_dir, size=size, start=start,
+        digits=digits, quality=quality, ext=ext,
+        visualizations=visualizations, comparisons=comparisons, limit=limit
+    )
+
+    if result["total_crops"] == 0:
+        return
+
+    print(f"\n数据集格式: {result['format'].upper()}")
+    for split_name, stats in result["splits"].items():
+        print(f"  [{split_name}] 原图 {stats['images']} 张 → 裁剪图 {stats['crops']} 张, "
+              f"标注框 {stats['boxes']} 个")
+
+    print(f"\n[OK] 裁剪完成！共生成 {result['total_crops']} 张 {size}x{size} 小图"
+          f"（来自 {result['total_images']} 张原图）")
+    print(f"  输出目录: {result['output_dir']}")
+    print(f"  标注框: 源 {sum(s['source_boxes'] for s in result['splits'].values())} 个"
+          f" → 输出 {result['total_boxes']} 个"
+          f"（切边 {result['clipped_boxes']}, 丢弃 {result['dropped_boxes']}, "
+          f"无效 {result['invalid_boxes']}）")
+    if result["clipped_anchors"]:
+        print(f"  提示: {result['clipped_anchors']} 张裁剪图的参考目标比窗口大，已被切边")
+    if result["anchor_lost"]:
+        print(f"  提示: {result['anchor_lost']} 个目标在窗口内不可见，未出图")
+    if result["bad_label_lines"]:
+        print(f"  警告: 跳过 {result['bad_label_lines']} 行无法解析的标注")
+    if result["size_mismatch"]:
+        print(f"  警告: {result['size_mismatch']} 个 XML 记录的图片尺寸与实际不符，"
+              f"已按实际尺寸处理")
+    skipped = (result["skipped_small"] + result["skipped_no_label"]
+               + result["skipped_empty_label"] + result["skipped_broken"])
+    if skipped:
+        print(f"  跳过: 尺寸不足 {result['skipped_small']}, "
+              f"缺图或缺标注 {result['skipped_no_label']}, "
+              f"无有效目标 {result['skipped_empty_label']}, "
+              f"读取失败 {result['skipped_broken']}")
+    if result["overwritten"]:
+        print(f"  提示: 覆盖了 {result['overwritten']} 个同名文件")
+    if result["visualizations"] or result["comparisons"]:
+        print(f"  可视化: 标注图 {result['visualizations']} 张, "
+              f"对比图 {result['comparisons']} 张")
+    if result["crop_map"]:
+        print(f"  裁剪映射表: {result['crop_map']}")
+
+
 def main():
     """dstool 主入口"""
     parser = argparse.ArgumentParser(
@@ -389,6 +507,7 @@ def main():
   dstool merge-yolo -train ./train_set -val ./val_set -test ./test_set -output ./full_yolo
   dstool merge-voc  -train ./train_voc -val ./val_voc -test ./test_voc -output ./full_voc
   dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
+  dstool crop-dataset -src ./full_yolo -prefix six-axis -output ./cropped
         """),
     )
 
@@ -489,6 +608,36 @@ def main():
     p_rename_yolo.add_argument("-start", type=int, help="每个分集的起始序号（默认 1）")
     p_rename_yolo.add_argument("-digits", type=int, help="序号位数，不足补零（默认 4）")
 
+    # ---- crop-dataset ----
+    p_crop = subparsers.add_parser(
+        "crop-dataset", aliases=["crop"],
+        help="按目标裁剪数据集为固定尺寸小图（YOLO / VOC）",
+        description="把数据集中的每个目标裁剪成一张固定尺寸的小图，"
+                    "标注框同步变换，并生成可视化图片与对比图",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+        示例:
+          dstool crop-dataset
+          dstool crop-dataset -src ./dataset -prefix six-axis -output ./cropped
+          dstool crop-dataset -src ./dataset -prefix six-axis -size 640 -quality 95
+          dstool crop-dataset -src ./dataset -prefix six-axis -no-compare
+        """),
+    )
+    p_crop.add_argument("-src", type=str, help="数据集根目录（YOLO 或 VOC，自动识别）")
+    p_crop.add_argument("-prefix", type=str,
+                        help="输出文件名前缀，如 six-axis（参数模式下必填）")
+    p_crop.add_argument("-output", type=str,
+                        help="输出目录；省略时默认在源目录同级创建 <源目录名>_cropped")
+    p_crop.add_argument("-size", type=int, help="裁剪窗口边长（默认 512）")
+    p_crop.add_argument("-start", type=int, help="每个分集的起始序号（默认 1）")
+    p_crop.add_argument("-digits", type=int, help="序号位数，不足补零（默认 4）")
+    p_crop.add_argument("-quality", type=int, help="输出 JPEG 质量 1-100（默认 95）")
+    p_crop.add_argument("-ext", type=str, choices=["jpg", "jpeg", "png"],
+                        help="输出图片格式（默认 jpg）")
+    p_crop.add_argument("-limit", type=int, help="每个分集只处理前 N 张原图（默认不限）")
+    p_crop.add_argument("-no-viz", action="store_true", help="不生成标注可视化图")
+    p_crop.add_argument("-no-compare", action="store_true", help="不生成原图/裁剪对比图")
+
     # 解析参数
     args = parser.parse_args()
 
@@ -497,14 +646,20 @@ def main():
         return
 
     # 路由到对应的处理函数
+    # 注意: argparse 会把 args.command 设成用户实际输入的别名原文，
+    # 因此别名也必须在这里登记，否则会静默打印帮助
     handlers = {
         "json2voc": _cmd_json2voc,
+        "json2VOC": _cmd_json2voc,
         "json2yolo": _cmd_json2yolo,
         "voc2yolo": _cmd_voc2yolo,
+        "VOC2yolo": _cmd_voc2yolo,
         "json2mask": _cmd_json2mask,
         "merge-yolo": _cmd_merge_yolo,
         "merge-voc": _cmd_merge_voc,
         "rename-yolo": _cmd_rename_yolo,
+        "crop-dataset": _cmd_crop_dataset,
+        "crop": _cmd_crop_dataset,
     }
 
     handler = handlers.get(args.command)

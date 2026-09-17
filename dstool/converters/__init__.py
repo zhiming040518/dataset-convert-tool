@@ -7,6 +7,7 @@ from dstool.converters.json2mask import convert_json2mask
 from dstool.converters.merge_yolo import convert_merge_yolo
 from dstool.converters.merge_voc import convert_merge_voc
 from dstool.converters.rename_yolo import convert_rename_yolo
+from dstool.converters.crop_dataset import convert_crop_dataset
 
 __all__ = [
     "convert_json2voc",
@@ -16,4 +17,5 @@ __all__ = [
     "convert_merge_yolo",
     "convert_merge_voc",
     "convert_rename_yolo",
+    "convert_crop_dataset",
 ]

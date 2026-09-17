@@ -18,6 +18,7 @@ LabelMe JSON  ──→  Pixel Mask PNG   (json2mask)
 多数据集合并  ──→  完整 YOLO 数据集  (merge-yolo)
 多数据集合并  ──→  完整 VOC 数据集   (merge-voc)
 YOLO 数据集重命名（图片 + 标注同步）  (rename-yolo)
+按目标裁剪数据集为统一尺寸小图       (crop-dataset)
 ```
 
 ---
@@ -34,6 +35,7 @@ YOLO 数据集重命名（图片 + 标注同步）  (rename-yolo)
   - [dstool merge-yolo](#dstool-merge-yolo)
   - [dstool merge-voc](#dstool-merge-voc)
   - [dstool rename-yolo](#dstool-rename-yolo)
+  - [dstool crop-dataset](#dstool-crop-dataset)
 - [LabelMe JSON 输入格式](#labelme-json-输入格式)
 - [输出格式说明](#输出格式说明)
 - [使用场景示例](#使用场景示例)
@@ -506,6 +508,110 @@ dstool rename-yolo
 
 ---
 
+### dstool crop-dataset
+
+把数据集里的**每个目标裁成一张固定尺寸的小图**（默认 512x512），标注框同步变换，并生成可视化图片。
+
+标注时图片往往很大（手机随手拍 4000x3000），目标只占其中一小块；直接整图缩到 512x512 会让目标小到看不清。这个命令按目标取窗口，让目标成为画面主体：
+
+```
+原图 1200x800                     裁剪结果 512x512
+┌──────────────────────────┐      ┌──────────────┐
+│                          │      │              │
+│  ┌──┐                    │  ─►  │ ┌──┐         │  ← 窗口左边 = 0.25×(1200−512) = 172
+│  │目标│                   │      │ │目标│        │     目标在窗口里仍是 (0.25, 0.5)
+│  └──┘                    │      │ └──┘         │
+│                          │      │              │
+└──────────────────────────┘      └──────────────┘
+```
+
+**窗口定位规则（相对位置等比滑动）**：设目标框中心在原图中的相对位置为 `(rx, ry)`，则窗口左上角
+
+```
+ox = rx × (原图宽 − 窗口边长)      oy = ry × (原图高 − 窗口边长)
+```
+
+于是目标中心在裁剪图中的相对位置**仍然是 `(rx, ry)`**，与原图完全一致：目标靠左时窗口贴左边缘，靠右时贴右边缘。
+
+如果按上式定位会把**目标本身**切出窗口（目标贴着原图边缘时必然发生），窗口会在允许范围内滑动到「能让目标完整进框」且最接近上式的位置——即「有丢失就挪窗口，让相对位置尽量不变」。目标比窗口还大时无法两全，此时窗口对准目标中心，两侧对称切掉。
+
+**一张原图有几个目标就裁几张**，所以数据集会变大（原图 1000 张、平均 3 个目标 → 约 3000 张）。也因此本命令只有「输出到新目录」一种模式，没有原地模式。
+
+```bash
+# 按目标裁剪（YOLO 或 VOC 自动识别）
+dstool crop-dataset -src ./full_yolo -prefix six-axis -output ./cropped
+
+# 交互模式
+dstool crop-dataset
+# 别名
+dstool crop -src ./full_yolo -prefix six-axis -output ./cropped
+```
+
+**参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `-src` | 数据集根目录（YOLO 或 VOC，自动识别），参数模式下必填 |
+| `-prefix` | 输出文件名前缀（如 `six-axis`），参数模式下必填 |
+| `-output` | 输出目录，省略时默认在源目录同级创建 `<源目录名>_cropped` |
+| `-size` | 裁剪窗口边长，默认 `512` |
+| `-start` | 每个分集的起始序号，默认 `1` |
+| `-digits` | 序号位数，不足补零，默认 `4`；超出自动加宽 |
+| `-quality` | 输出 JPEG 质量 1-100，默认 `95` |
+| `-ext` | 输出图片格式 `jpg` / `jpeg` / `png`，默认 `jpg` |
+| `-limit` | 每个分集只处理前 N 张原图，先试跑用 |
+| `-no-viz` | 不生成标注可视化图 |
+| `-no-compare` | 不生成原图/裁剪对比图（大原图缩放较吃 CPU） |
+
+**标签处理**：
+
+- 每张裁剪图保留**窗口内所有可见目标**（不只是参考目标），避免把画面里看得见的目标漏标
+- 被窗口切到的框**钳制成可见部分**后保留（YOLO/VOC 对截断目标的通行做法）
+- 完全落在窗口外的框丢弃；源标注自身越界或退化的框剔除，都计入终端统计
+- 没有标注的图片、标注为空的图片、任一边小于 `-size` 的图片**跳过并报告**（不放大、不补边）
+- 沿用各自格式约定：YOLO 写 `class_id cx cy w h`（6 位小数），VOC 写 `size` + `bndbox`（整数像素）；VOC XML 里记录的尺寸与实际不符时**以实际图片为准**并告警
+
+**输出结构**（YOLO 输入，与 merge-yolo 产物同构，可直接喂 YOLOv8）：
+
+```
+cropped/
+├── images/train/six-axis_train_0001.jpg     # 每个目标一张 512x512
+├── labels/train/six-axis_train_0001.txt     # 同名标注，含窗口内可见目标
+├── classes.txt
+├── dataset.yaml                             # path/train/val/nc/names
+├── visualizations/                          # 裁剪图 + 标注框
+├── comparisons/                             # 原图（画出窗口位置）/ 裁剪结果 左右对比
+└── crop_map.txt                             # 裁剪映射表
+```
+
+VOC 输入则输出 `JPEGImages/`、`Annotations/`、`ImageSets/Main/{train,val}.txt`（沿用 VOC 约定）。
+
+**`crop_map.txt`** 记录每张裁剪图的来历，便于核查与复现：
+
+```
+# stem	src_image	ox	oy	size	anchor_index	anchor_line	anchor_label	boxes	dropped	clipped	src_w	src_h
+six-axis_train_0001	scene.jpg	250	0	512	0	0	person	2	0	0	1200	800
+```
+
+**终端输出示例**：
+
+```
+数据集格式: YOLO
+  [train] 原图 30 张 → 裁剪图 74 张, 标注框 168 个
+
+[OK] 裁剪完成！共生成 74 张 512x512 小图（来自 30 张原图）
+  输出目录: /home/user/cropped
+  标注框: 源 45 个 → 输出 168 个（切边 12, 丢弃 23, 无效 0）
+  提示: 2 张裁剪图的参考目标比窗口大，已被切边
+  跳过: 尺寸不足 3, 缺图或缺标注 1, 无有效目标 0, 读取失败 0
+  可视化: 标注图 74 张, 对比图 74 张
+  裁剪映射表: /home/user/cropped/crop_map.txt
+```
+
+打开 `comparisons/` 里的对比图可以一眼看出窗口取得对不对：左边是原图，红框标出裁剪窗口的位置，右边是裁剪结果，两侧都画了标注框。
+
+---
+
 ## LabelMe JSON 输入格式
 
 dstool 接受标准的 **LabelMe** 标注格式。每个 JSON 文件对应一张图片的标注信息。
@@ -738,6 +844,21 @@ dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
 
 重命名后 `rename_map.txt` 里保存了新旧文件名对照，需要回退时按表改回即可。
 
+### 场景 8：把大图裁成统一小图训练
+
+图片分辨率很高、目标只占一小块时，按目标裁剪能让目标成为画面主体：
+
+```bash
+# 先合并 + 重命名，再按目标裁剪成 512x512
+dstool merge-yolo -train ./yolo_train -val ./yolo_val -test ./yolo_test -output ./full_yolo
+dstool rename-yolo -src ./full_yolo -prefix six-axis -inplace
+dstool crop-dataset -src ./full_yolo -prefix six-axis -output ./cropped
+
+# 先小样本试跑，确认窗口取得对：
+dstool crop-dataset -src ./full_yolo -prefix six-axis -output ./try -limit 20
+# 然后看 comparisons/ 里的对比图核对窗口位置，满意再跑全量
+```
+
 ---
 
 ## 依赖
@@ -813,7 +934,8 @@ dstool/
 │       ├── json2mask.py     # LabelMe JSON → Pixel Mask PNG
 │       ├── merge_yolo.py    # 合并 YOLO 数据集（智能目录检测）
 │       ├── merge_voc.py     # 合并 VOC 数据集（智能目录检测）
-│       └── rename_yolo.py   # YOLO 数据集重命名（图片 + 标注同步）
+│       ├── rename_yolo.py   # YOLO 数据集重命名（图片 + 标注同步）
+│       └── crop_dataset.py  # 按目标裁剪为统一尺寸（YOLO / VOC）
 └── test_data/
     └── json_labels/         # 测试用 LabelMe JSON 示例
 ```
