@@ -93,18 +93,19 @@ class Split:
 
 
 def _window_offset(anchor: SourceBox, width: int, height: int,
-                   size: int) -> Tuple[int, int]:
+                   size_w: int, size_h: int) -> Tuple[int, int]:
     """计算裁剪窗口左上角：按相对位置等比滑动，并在必要时光滑让开
 
     理想位置由「目标中心的相对位置在裁剪图中保持不变」推出：
-        ox = rx × (原图宽 − 窗口边长)
+        ox = rx × (原图宽 − 窗口宽)
+        oy = ry × (原图高 − 窗口高)
     若该位置会把目标本身切出窗口（目标贴着原图边缘时必然发生），
     则把窗口在允许范围内滑动到「能让目标完整进框」且最接近理想位置处。
 
     Args:
         anchor: 参考目标框（原图像素坐标，已钳制到图片范围内）
-        width, height: 原图尺寸（必须均 >= size）
-        size: 窗口边长
+        width, height: 原图尺寸（必须分别 >= size_w、size_h）
+        size_w, size_h: 窗口宽高（可不等，窗口不必是正方形）
 
     Returns:
         (ox, oy) 窗口左上角像素坐标
@@ -112,12 +113,47 @@ def _window_offset(anchor: SourceBox, width: int, height: int,
     cx = (anchor.xmin + anchor.xmax) / 2.0
     cy = (anchor.ymin + anchor.ymax) / 2.0
 
-    ox = int(round(cx / width * (width - size)))
-    oy = int(round(cy / height * (height - size)))
+    ox = int(round(cx / width * (width - size_w)))
+    oy = int(round(cy / height * (height - size_h)))
 
-    ox = _keep_inside(ox, anchor.xmin, anchor.xmax, width, size)
-    oy = _keep_inside(oy, anchor.ymin, anchor.ymax, height, size)
+    ox = _keep_inside(ox, anchor.xmin, anchor.xmax, width, size_w)
+    oy = _keep_inside(oy, anchor.ymin, anchor.ymax, height, size_h)
     return ox, oy
+
+
+def parse_size(value: Any) -> Tuple[int, int]:
+    """解析裁剪尺寸，支持多种写法
+
+    Args:
+        value: 512 / "512" / "640x480" / "640*480" / "640,480" / (640, 480)
+
+    Returns:
+        (宽, 高)
+
+    Raises:
+        ValueError: 写法无法识别或数值非正
+    """
+    if isinstance(value, (tuple, list)):
+        if len(value) != 2:
+            raise ValueError(f"尺寸需要两个数，收到 {value!r}")
+        size_w, size_h = int(value[0]), int(value[1])
+    elif isinstance(value, bool):
+        raise ValueError(f"无法识别的尺寸: {value!r}")
+    elif isinstance(value, int):
+        size_w = size_h = value
+    else:
+        text = str(value).strip().lower().replace("*", "x").replace(",", "x")
+        parts = text.split("x")
+        if len(parts) == 1:
+            size_w = size_h = int(parts[0])
+        elif len(parts) == 2:
+            size_w, size_h = int(parts[0]), int(parts[1])
+        else:
+            raise ValueError(f"无法识别的尺寸: {value!r}")
+
+    if size_w < 1 or size_h < 1:
+        raise ValueError(f"尺寸需为正整数，收到 {value!r}")
+    return size_w, size_h
 
 
 def _keep_inside(pos: int, low: float, high: float, total: int, size: int) -> int:
@@ -158,7 +194,7 @@ def _clamp_boxes_to_image(boxes: List[SourceBox],
 
 
 def _transform_boxes(boxes: List[SourceBox], ox: int, oy: int,
-                     size: int) -> Tuple[List[Dict[str, Any]], int, int]:
+                     size_w: int, size_h: int) -> Tuple[List[Dict[str, Any]], int, int]:
     """把标注框变换到窗口坐标系：平移 → 与窗口求交 → 取整
 
     Returns:
@@ -176,13 +212,13 @@ def _transform_boxes(boxes: List[SourceBox], ox: int, oy: int,
 
         # 先判断是否被窗口边界切到（只碰到边界不算）
         is_clipped = (xmin < 0.0 or ymin < 0.0
-                      or xmax > float(size) or ymax > float(size))
+                      or xmax > float(size_w) or ymax > float(size_h))
 
         # 与窗口求交，保住可见部分
         vx1 = max(xmin, 0.0)
         vy1 = max(ymin, 0.0)
-        vx2 = min(xmax, float(size))
-        vy2 = min(ymax, float(size))
+        vx2 = min(xmax, float(size_w))
+        vy2 = min(ymax, float(size_h))
 
         if vx2 - vx1 < MIN_VISIBLE or vy2 - vy1 < MIN_VISIBLE:
             dropped += 1
@@ -413,7 +449,7 @@ def _load_image(image_path: str) -> Image.Image:
 # ---------------------------------------------------------------- 计划
 
 
-def _plan_split(split: Split, classes: List[str], size: int,
+def _plan_split(split: Split, classes: List[str], size_w: int, size_h: int,
                 limit: int, is_voc: bool) -> Tuple[List[CropItem], Dict[str, int]]:
     """扫描一个分集，生成裁剪计划（不写盘）
 
@@ -469,7 +505,7 @@ def _plan_split(split: Split, classes: List[str], size: int,
             stats["skipped_broken"] += 1
             continue
 
-        if width < size or height < size:
+        if width < size_w or height < size_h:
             stats["skipped_small"] += 1
             continue
 
@@ -495,9 +531,10 @@ def _plan_split(split: Split, classes: List[str], size: int,
             continue
 
         for index, anchor in enumerate(valid_boxes):
-            ox, oy = _window_offset(anchor, width, height, size)
+            ox, oy = _window_offset(anchor, width, height, size_w, size_h)
 
-            kept, dropped, clipped = _transform_boxes(valid_boxes, ox, oy, size)
+            kept, dropped, clipped = _transform_boxes(valid_boxes, ox, oy,
+                                                      size_w, size_h)
             if not kept:
                 # 参考目标自身在窗口里连 1 像素都不可见，不出图
                 stats["anchor_lost"] += 1
@@ -511,7 +548,7 @@ def _plan_split(split: Split, classes: List[str], size: int,
                 continue
 
             if (anchor.xmin - ox < 0.0 or anchor.ymin - oy < 0.0
-                    or anchor.xmax - ox > size or anchor.ymax - oy > size):
+                    or anchor.xmax - ox > size_w or anchor.ymax - oy > size_h):
                 # 参考目标自身被窗口切到（目标比窗口还大时必然发生）
                 stats["clipped_anchors"] += 1
 
@@ -546,12 +583,12 @@ def _find_voc_image(stem: str, images_dir: str) -> Optional[str]:
 def _write_comparison(orig_img: Image.Image, crop_img: Image.Image,
                       item: CropItem, boxes: List[SourceBox],
                       class_colors: Dict[str, Tuple[int, int, int]],
-                      output_path: str, size: int) -> bool:
+                      output_path: str, size_w: int, size_h: int) -> bool:
     """生成「原图（标出裁剪窗口）/ 裁剪结果」左右对比图"""
     orig_w, orig_h = orig_img.size
 
-    # 左面板按比例缩到最大宽度内（原图两边都 >= size，因此 scale <= 1）
-    scale = min(size / float(orig_h), MAX_PANEL_W / float(orig_w))
+    # 左面板按比例缩到最大宽度内（原图两边都 >= 窗口，因此 scale <= 1）
+    scale = min(size_h / float(orig_h), MAX_PANEL_W / float(orig_w))
     left_w = max(1, int(round(orig_w * scale)))
     left_h = max(1, int(round(orig_h * scale)))
     if (left_w, left_h) == (orig_w, orig_h):
@@ -561,11 +598,12 @@ def _write_comparison(orig_img: Image.Image, crop_img: Image.Image,
 
     title_h = 24
     gap = 8
-    content_h = max(left_h, size)
-    canvas = Image.new("RGB", (left_w + gap + size, title_h + content_h), (32, 32, 32))
+    content_h = max(left_h, size_h)
+    canvas = Image.new("RGB", (left_w + gap + size_w, title_h + content_h),
+                       (32, 32, 32))
 
     left_top = title_h + (content_h - left_h) // 2
-    crop_top = title_h + (content_h - size) // 2
+    crop_top = title_h + (content_h - size_h) // 2
     canvas.paste(left, (0, left_top))
     canvas.paste(crop_img, (left_w + gap, crop_top))
 
@@ -587,8 +625,8 @@ def _write_comparison(orig_img: Image.Image, crop_img: Image.Image,
     # 左面板：裁剪窗口的位置（最后画，压在最上层）
     win_x1 = item.ox * scale
     win_y1 = item.oy * scale + left_top
-    win_x2 = (item.ox + size) * scale
-    win_y2 = (item.oy + size) * scale + left_top
+    win_x2 = (item.ox + size_w) * scale
+    win_y2 = (item.oy + size_h) * scale + left_top
     for offset in range(2):
         draw.rectangle(
             [win_x1 - offset, win_y1 - offset, win_x2 + offset, win_y2 + offset],
@@ -612,9 +650,10 @@ def _write_comparison(orig_img: Image.Image, crop_img: Image.Image,
                    fill=(90, 90, 90))
     if font:
         draw.text((6, 4),
-                  f"original {orig_w}x{orig_h}  window=({item.ox},{item.oy}) {size}x{size}",
+                  f"original {orig_w}x{orig_h}  window=({item.ox},{item.oy}) "
+                  f"{size_w}x{size_h}",
                   fill=(230, 230, 230), font=font)
-        draw.text((left_w + gap + 6, 4), f"crop {size}x{size}",
+        draw.text((left_w + gap + 6, 4), f"crop {size_w}x{size_h}",
                   fill=(230, 230, 230), font=font)
 
     try:
@@ -637,7 +676,8 @@ def _execute_split(items: List[CropItem], split: Split, cfg: Dict[str, Any],
         (统计计数, [(裁剪计划项, 输出主干名)] —— 只含真正写出的项)
     """
     is_voc = cfg["is_voc"]
-    size = cfg["size"]
+    size_w = cfg["size_w"]
+    size_h = cfg["size_h"]
     out_root = cfg["output_dir"]
 
     if is_voc:
@@ -683,7 +723,8 @@ def _execute_split(items: List[CropItem], split: Split, cfg: Dict[str, Any],
             stem = _new_stem(cfg["prefix"], split.token, index, digits)
             index += 1
 
-            crop = image.crop((item.ox, item.oy, item.ox + size, item.oy + size))
+            crop = image.crop((item.ox, item.oy,
+                               item.ox + size_w, item.oy + size_h))
             out_image = os.path.join(out_images_dir, stem + ext)
             if os.path.exists(out_image):
                 counters["overwritten"] += 1
@@ -691,7 +732,7 @@ def _execute_split(items: List[CropItem], split: Split, cfg: Dict[str, Any],
 
             if is_voc:
                 out_label = os.path.join(out_labels_dir, stem + ".xml")
-                xml = _create_voc_xml({"imageWidth": size, "imageHeight": size},
+                xml = _create_voc_xml({"imageWidth": size_w, "imageHeight": size_h},
                                       os.path.basename(out_image), item.boxes)
                 with open(out_label, "w", encoding="utf-8") as f:
                     f.write(xml)
@@ -701,7 +742,7 @@ def _execute_split(items: List[CropItem], split: Split, cfg: Dict[str, Any],
                     for box in item.boxes:
                         cx, cy, bw, bh = yolo_bbox(
                             box["xmin"], box["ymin"], box["xmax"], box["ymax"],
-                            size, size
+                            size_w, size_h
                         )
                         f.write(f"{box['class_id']} {cx:.6f} {cy:.6f} "
                                 f"{bw:.6f} {bh:.6f}\n")
@@ -715,7 +756,8 @@ def _execute_split(items: List[CropItem], split: Split, cfg: Dict[str, Any],
 
             if cmp_dir:
                 if _write_comparison(image, crop, item, source_boxes, class_colors,
-                                     os.path.join(cmp_dir, stem + ".jpg"), size):
+                                     os.path.join(cmp_dir, stem + ".jpg"),
+                                     size_w, size_h):
                     stats["comparisons"] += 1
 
             stats["crops"] += 1
@@ -770,11 +812,12 @@ def _write_crop_map(output_dir: str, records: List[Dict[str, Any]]) -> Optional[
     map_path = os.path.join(output_dir, "crop_map.txt")
     with open(map_path, "w", encoding="utf-8") as f:
         f.write("# dstool crop-dataset 裁剪映射表 (TSV)\n")
-        f.write("# stem\tsrc_image\tox\toy\tsize\tanchor_index\tanchor_line"
+        f.write("# stem\tsrc_image\tox\toy\tsize_w\tsize_h\tanchor_index\tanchor_line"
                 "\tanchor_label\tboxes\tdropped\tclipped\tsrc_w\tsrc_h\n")
         for r in records:
             f.write("\t".join(str(v) for v in (
-                r["stem"], os.path.basename(r["src_image"]), r["ox"], r["oy"], r["size"],
+                r["stem"], os.path.basename(r["src_image"]), r["ox"], r["oy"],
+                r["size_w"], r["size_h"],
                 r["anchor_index"], r["anchor_line"], r["anchor_label"],
                 r["boxes"], r["dropped"], r["clipped"], r["src_w"], r["src_h"],
             )) + "\n")
@@ -819,7 +862,7 @@ def convert_crop_dataset(
     src_dir: str,
     prefix: str,
     output_dir: Optional[str] = None,
-    size: int = DEFAULT_SIZE,
+    size: Any = DEFAULT_SIZE,
     start: int = 1,
     digits: int = 4,
     quality: int = DEFAULT_QUALITY,
@@ -830,15 +873,15 @@ def convert_crop_dataset(
 ) -> Dict[str, Any]:
     """按目标把数据集裁剪成固定尺寸的小图
 
-    一张原图有 N 个目标就生成 N 张 size×size 的图，命名格式为
-    {前缀}_{分集}_{序号}。窗口按「相对位置等比滑动」定位，保证目标中心在
-    裁剪图中的相对位置与原图一致。
+    一张原图有 N 个目标就生成 N 张图（尺寸由 size 决定，可非正方形），
+    命名格式为 {前缀}_{分集}_{序号}。窗口按「相对位置等比滑动」定位，
+    保证目标中心在裁剪图中的相对位置与原图一致。
 
     Args:
         src_dir: 数据集根目录（YOLO 或 VOC，自动识别）
         prefix: 输出文件名前缀（如 six-axis）
         output_dir: 输出目录
-        size: 裁剪窗口边长（正方形）
+        size: 裁剪窗口尺寸，支持 512 / "512" / "640x480" / (640, 480)
         start: 每个分集的起始序号
         digits: 序号位数（不足补零，超出自动加宽）
         quality: JPEG 质量 1-100
@@ -857,6 +900,7 @@ def convert_crop_dataset(
     empty = {
         "format": None, "total_images": 0, "total_crops": 0, "total_labels": 0,
         "total_boxes": 0, "classes": [], "splits": {}, "output_dir": None,
+        "size_w": 0, "size_h": 0,
         "skipped_small": 0, "skipped_no_label": 0, "skipped_empty_label": 0,
         "skipped_broken": 0, "crop_map": None, "overwritten": 0,
         "visualizations": 0, "comparisons": 0,
@@ -868,8 +912,10 @@ def convert_crop_dataset(
     if not prefix:
         print("错误: 前缀不能为空")
         return empty
-    if size < 1:
-        print("错误: 裁剪尺寸需为正整数")
+    try:
+        size_w, size_h = parse_size(size)
+    except ValueError as e:
+        print(f"错误: {e}")
         return empty
     if start < 1 or digits < 1:
         print("错误: start 与 digits 需为正整数")
@@ -920,7 +966,8 @@ def convert_crop_dataset(
     make_output_dir(output_dir)
 
     cfg = {
-        "is_voc": is_voc, "size": size, "output_dir": output_dir, "prefix": prefix,
+        "is_voc": is_voc, "size_w": size_w, "size_h": size_h,
+        "output_dir": output_dir, "prefix": prefix,
         "start": start, "quality": quality, "ext": ext,
         "visualizations": visualizations, "comparisons": comparisons,
         "classes": classes,
@@ -938,7 +985,7 @@ def convert_crop_dataset(
     for split in splits:
         name = split.token or "全部"
         print(f"扫描 [{name}] ...")
-        items, plan_stats = _plan_split(split, classes, size, limit, is_voc)
+        items, plan_stats = _plan_split(split, classes, size_w, size_h, limit, is_voc)
 
         if items:
             # 序号位数按本分集的裁剪图数量自动加宽
@@ -952,7 +999,8 @@ def convert_crop_dataset(
                     src_w = src_h = 0
                 records.append({
                     "stem": stem, "src_image": item.src_image, "ox": item.ox,
-                    "oy": item.oy, "size": size, "anchor_index": item.src_index,
+                    "oy": item.oy, "size_w": size_w, "size_h": size_h,
+                    "anchor_index": item.src_index,
                     "anchor_line": item.anchor_line,
                     "anchor_label": item.boxes[item.anchor_line]["label"],
                     "boxes": len(item.boxes), "dropped": item.n_dropped,
@@ -991,15 +1039,13 @@ def convert_crop_dataset(
             "skipped_broken": plan_stats["skipped_broken"],
         }
 
-    if total_crops == 0:
-        print("错误: 没有生成任何裁剪图，请检查数据集结构与标注")
-        return empty
-
     # ---- 第3步：元文件 ----
-    if not is_voc:
-        _write_yolo_meta(output_dir, classes, tokens)
-
-    map_path = _write_crop_map(output_dir, records)
+    if total_crops:
+        if not is_voc:
+            _write_yolo_meta(output_dir, classes, tokens)
+        map_path = _write_crop_map(output_dir, records)
+    else:
+        map_path = None
 
     totals: Dict[str, int] = {}
     for stats in split_stats.values():
@@ -1007,7 +1053,7 @@ def convert_crop_dataset(
             if key != "images":
                 totals[key] = totals.get(key, 0) + value
 
-    return {
+    result = {
         "format": fmt,
         "total_images": total_images,
         "total_crops": total_crops,
@@ -1016,6 +1062,8 @@ def convert_crop_dataset(
         "classes": classes,
         "splits": split_stats,
         "output_dir": output_dir,
+        "size_w": size_w,
+        "size_h": size_h,
         "skipped_small": counters.get("skipped_small", 0),
         "skipped_no_label": counters.get("skipped_no_label", 0),
         "skipped_empty_label": counters.get("skipped_empty_label", 0),
@@ -1032,3 +1080,26 @@ def convert_crop_dataset(
         "bad_label_lines": totals.get("bad_label_lines", 0),
         "size_mismatch": totals.get("size_mismatch", 0),
     }
+
+    if total_crops == 0:
+        _print_nothing_cropped(result)
+
+    return result
+
+
+def _print_nothing_cropped(result: Dict[str, Any]) -> None:
+    """一张裁剪图都没产出时，说明具体卡在哪一步"""
+    print(f"\n错误: 没有生成任何裁剪图（扫描到 {result['total_images']} 张原图）")
+
+    reasons = [
+        (result["skipped_small"],
+         f"尺寸不足 {result['size_w']}x{result['size_h']}"),
+        (result["skipped_no_label"], "缺图片或缺标注文件"),
+        (result["skipped_empty_label"], "标注里没有有效目标"),
+        (result["skipped_broken"], "图片或标注读取失败"),
+    ]
+    shown = [f"{name} {count} 张" for count, name in reasons if count]
+    if shown:
+        print("  跳过原因: " + ", ".join(shown))
+    else:
+        print("  请检查数据集结构与标注格式是否正确")

@@ -33,6 +33,25 @@ def _get_output_path(prompt: str, default: str) -> str:
     return os.path.abspath(user_input)
 
 
+def _get_size(prompt: str, default: int):
+    """交互式获取裁剪尺寸，支持 512 或 640x480 写法
+
+    Returns:
+        原样返回用户输入（由 convert_crop_dataset 统一解析），空输入返回默认值
+    """
+    user_input = input(prompt).strip()
+    if not user_input:
+        return default
+
+    from dstool.converters.crop_dataset import parse_size
+    try:
+        parse_size(user_input)
+    except ValueError:
+        print(f"  输入无效，使用默认值 {default}x{default}")
+        return default
+    return user_input
+
+
 def _get_int(prompt: str, default: int) -> int:
     """交互式获取正整数输入"""
     user_input = input(prompt).strip()
@@ -375,7 +394,9 @@ def _cmd_rename_yolo(args):
 
 def _cmd_crop_dataset(args):
     """crop-dataset 命令处理"""
-    from dstool.converters.crop_dataset import DEFAULT_SIZE, convert_crop_dataset
+    from dstool.converters.crop_dataset import (
+        DEFAULT_SIZE, convert_crop_dataset, parse_size,
+    )
     from dstool.converters.rename_yolo import sanitize_prefix
 
     has_args = bool(args.src or args.output or args.prefix)
@@ -401,7 +422,8 @@ def _cmd_crop_dataset(args):
             if not prefix:
                 print("  前缀不能为空且不能只包含非法字符，请重新输入")
 
-        size = _get_int("请输入裁剪尺寸 (留空使用 512): ", DEFAULT_SIZE)
+        size = _get_size(f"请输入裁剪尺寸，留空使用 {DEFAULT_SIZE}x{DEFAULT_SIZE}，"
+                         f"也可输入 640x480: ", DEFAULT_SIZE)
         start = _get_int("请输入起始序号 (留空使用 1): ", 1)
         digits = _get_int("请输入序号位数 (留空使用 4): ", 4)
         visualizations = input(
@@ -424,7 +446,7 @@ def _cmd_crop_dataset(args):
             os.path.basename(src_dir) + output_suffix
         )
         prefix = args.prefix
-        size = args.size if args.size is not None else DEFAULT_SIZE
+        size = args.size if args.size else DEFAULT_SIZE
         start = args.start if args.start is not None else 1
         digits = args.digits if args.digits is not None else 4
         quality = args.quality if args.quality is not None else 95
@@ -433,17 +455,23 @@ def _cmd_crop_dataset(args):
         visualizations = not args.no_viz
         comparisons = not args.no_compare
 
-        if size < 1 or start < 1 or digits < 1 or limit < 0:
-            print("错误: -size / -start / -digits 需为正整数，-limit 不能为负")
+        if start < 1 or digits < 1 or limit < 0:
+            print("错误: -start / -digits 需为正整数，-limit 不能为负")
             return
         if not 1 <= quality <= 100:
             print("错误: -quality 需要在 1~100 之间")
             return
 
+    try:
+        size_w, size_h = parse_size(size)
+    except ValueError:
+        print(f"错误: 无法识别的裁剪尺寸 '{size}'，请写成 512 或 640x480")
+        return
+
     print(f"\n源路径:   {src_dir}")
     print(f"输出路径: {output_dir}")
     print(f"命名规则: {prefix}_<分集>_<序号>   起始序号 {start}, {digits} 位")
-    print(f"裁剪窗口: {size}x{size}\n")
+    print(f"裁剪窗口: {size_w}x{size_h}\n")
 
     result = convert_crop_dataset(
         src_dir, prefix, output_dir=output_dir, size=size, start=start,
@@ -459,7 +487,8 @@ def _cmd_crop_dataset(args):
         print(f"  [{split_name}] 原图 {stats['images']} 张 → 裁剪图 {stats['crops']} 张, "
               f"标注框 {stats['boxes']} 个")
 
-    print(f"\n[OK] 裁剪完成！共生成 {result['total_crops']} 张 {size}x{size} 小图"
+    print(f"\n[OK] 裁剪完成！共生成 {result['total_crops']} 张 "
+          f"{result['size_w']}x{result['size_h']} 小图"
           f"（来自 {result['total_images']} 张原图）")
     print(f"  输出目录: {result['output_dir']}")
     print(f"  标注框: 源 {sum(s['source_boxes'] for s in result['splits'].values())} 个"
@@ -628,7 +657,8 @@ def main():
                         help="输出文件名前缀，如 six-axis（参数模式下必填）")
     p_crop.add_argument("-output", type=str,
                         help="输出目录；省略时默认在源目录同级创建 <源目录名>_cropped")
-    p_crop.add_argument("-size", type=int, help="裁剪窗口边长（默认 512）")
+    p_crop.add_argument("-size", type=str,
+                        help="裁剪窗口尺寸，512 或 640x480（默认 512，可非正方形）")
     p_crop.add_argument("-start", type=int, help="每个分集的起始序号（默认 1）")
     p_crop.add_argument("-digits", type=int, help="序号位数，不足补零（默认 4）")
     p_crop.add_argument("-quality", type=int, help="输出 JPEG 质量 1-100（默认 95）")

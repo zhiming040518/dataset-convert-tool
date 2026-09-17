@@ -510,7 +510,7 @@ dstool rename-yolo
 
 ### dstool crop-dataset
 
-把数据集里的**每个目标裁成一张固定尺寸的小图**（默认 512x512），标注框同步变换，并生成可视化图片。
+把数据集里的**每个目标裁成一张固定尺寸的小图**（默认 512x512，**支持非正方形**如 640x480），标注框同步变换，并生成可视化图片。
 
 标注时图片往往很大（手机随手拍 4000x3000），目标只占其中一小块；直接整图缩到 512x512 会让目标小到看不清。这个命令按目标取窗口，让目标成为画面主体：
 
@@ -528,7 +528,7 @@ dstool rename-yolo
 **窗口定位规则（相对位置等比滑动）**：设目标框中心在原图中的相对位置为 `(rx, ry)`，则窗口左上角
 
 ```
-ox = rx × (原图宽 − 窗口边长)      oy = ry × (原图高 − 窗口边长)
+ox = rx × (原图宽 − 窗口宽)        oy = ry × (原图高 − 窗口高)
 ```
 
 于是目标中心在裁剪图中的相对位置**仍然是 `(rx, ry)`**，与原图完全一致：目标靠左时窗口贴左边缘，靠右时贴右边缘。
@@ -538,8 +538,11 @@ ox = rx × (原图宽 − 窗口边长)      oy = ry × (原图高 − 窗口边
 **一张原图有几个目标就裁几张**，所以数据集会变大（原图 1000 张、平均 3 个目标 → 约 3000 张）。也因此本命令只有「输出到新目录」一种模式，没有原地模式。
 
 ```bash
-# 按目标裁剪（YOLO 或 VOC 自动识别）
+# 按目标裁剪（YOLO 或 VOC 自动识别），正方形
 dstool crop-dataset -src ./full_yolo -prefix six-axis -output ./cropped
+
+# 非正方形：宽x高
+dstool crop-dataset -src ./full_yolo -prefix six-axis -output ./cropped -size 640x480
 
 # 交互模式
 dstool crop-dataset
@@ -554,7 +557,7 @@ dstool crop -src ./full_yolo -prefix six-axis -output ./cropped
 | `-src` | 数据集根目录（YOLO 或 VOC，自动识别），参数模式下必填 |
 | `-prefix` | 输出文件名前缀（如 `six-axis`），参数模式下必填 |
 | `-output` | 输出目录，省略时默认在源目录同级创建 `<源目录名>_cropped` |
-| `-size` | 裁剪窗口边长，默认 `512` |
+| `-size` | 裁剪窗口尺寸：`512`（正方形）或 `640x480`（宽x高），默认 `512` |
 | `-start` | 每个分集的起始序号，默认 `1` |
 | `-digits` | 序号位数，不足补零，默认 `4`；超出自动加宽 |
 | `-quality` | 输出 JPEG 质量 1-100，默认 `95` |
@@ -568,14 +571,14 @@ dstool crop -src ./full_yolo -prefix six-axis -output ./cropped
 - 每张裁剪图保留**窗口内所有可见目标**（不只是参考目标），避免把画面里看得见的目标漏标
 - 被窗口切到的框**钳制成可见部分**后保留（YOLO/VOC 对截断目标的通行做法）
 - 完全落在窗口外的框丢弃；源标注自身越界或退化的框剔除，都计入终端统计
-- 没有标注的图片、标注为空的图片、任一边小于 `-size` 的图片**跳过并报告**（不放大、不补边）
+- 没有标注的图片、标注为空的图片、装不下窗口的图片（任一边小于对应窗口边长）**跳过并报告**，一张都没裁出来时会列出具体跳过原因（不放大、不补边）
 - 沿用各自格式约定：YOLO 写 `class_id cx cy w h`（6 位小数），VOC 写 `size` + `bndbox`（整数像素）；VOC XML 里记录的尺寸与实际不符时**以实际图片为准**并告警
 
 **输出结构**（YOLO 输入，与 merge-yolo 产物同构，可直接喂 YOLOv8）：
 
 ```
 cropped/
-├── images/train/six-axis_train_0001.jpg     # 每个目标一张 512x512
+├── images/train/six-axis_train_0001.jpg     # 每个目标一张（默认 512x512）
 ├── labels/train/six-axis_train_0001.txt     # 同名标注，含窗口内可见目标
 ├── classes.txt
 ├── dataset.yaml                             # path/train/val/nc/names
@@ -589,8 +592,8 @@ VOC 输入则输出 `JPEGImages/`、`Annotations/`、`ImageSets/Main/{train,val}
 **`crop_map.txt`** 记录每张裁剪图的来历，便于核查与复现：
 
 ```
-# stem	src_image	ox	oy	size	anchor_index	anchor_line	anchor_label	boxes	dropped	clipped	src_w	src_h
-six-axis_train_0001	scene.jpg	250	0	512	0	0	person	2	0	0	1200	800
+# stem	src_image	ox	oy	size_w	size_h	anchor_index	anchor_line	anchor_label	boxes	dropped	clipped	src_w	src_h
+six-axis_train_0001	scene.jpg	250	0	512	512	0	0	person	2	0	0	1200	800
 ```
 
 **终端输出示例**：
